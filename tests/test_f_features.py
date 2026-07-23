@@ -85,7 +85,7 @@ def test_frame_label_suspect():
     r = DecodeResult(content="X", format="QRCode",
                      position=[(0, 0), (1, 0), (1, 1), (0, 1)], suspect=True)
     frames = build_frames([r], 7)
-    assert frame_label(frames[0]) == "7?"
+    assert frame_label(frames[0]) == "7?: X"
     assert frames[0].seq == 7
 
 

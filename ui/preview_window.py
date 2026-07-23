@@ -29,6 +29,8 @@ COLOR_SUSPECT = QColor(230, 200, 0)   # 疑似码黄框
 COLOR_HIGHLIGHT = QColor(255, 140, 0) # 点击高亮橙框
 DIM_ALPHA = 60                        # 高亮态下其余帧透明度
 
+LABEL_MAX_CHARS = 24  # 标签内容截断阈值（全文在结果表格可见）
+
 
 @dataclass
 class Frame:
@@ -66,7 +68,37 @@ def frame_color(frame: Frame, state: str) -> QColor:
 
 
 def frame_label(frame: Frame) -> str:
-    return f"{frame.seq}{'?' if frame.suspect else ''}"
+    """标签文本：`N: 内容`（疑似 `N?: 内容`），内容 >24 字符截断加 …。"""
+    text = frame.content
+    if len(text) > LABEL_MAX_CHARS:
+        text = text[:LABEL_MAX_CHARS] + "…"
+    return f"{frame.seq}{'?' if frame.suspect else ''}: {text}"
+
+
+def label_style(frame: Frame, state: str) -> tuple[QColor, QColor, bool]:
+    """标签视觉规范（底色块, 文字色, 是否加粗）：
+    - 普通有效：黑底 65%（alpha 165）+ 白字
+    - 疑似：深黄底 65% + 白字（标签含 ? 后缀）
+    - 高亮：橙底不透明 + 白字加粗
+    - dim：底色/文字同步变淡（alpha 40/60）
+    """
+    if state == "highlight":
+        return QColor(255, 140, 0, 255), QColor(255, 255, 255), True
+    bg = QColor(150, 125, 0, 165) if frame.suspect else QColor(0, 0, 0, 165)
+    text = QColor(255, 255, 255)
+    if state == "dim":
+        bg = QColor(bg)
+        bg.setAlpha(40)
+        text = QColor(255, 255, 255, 60)
+    return bg, text, False
+
+
+def label_placement(box_left: float, box_top: float, box_w: float, box_h: float,
+                    text_w: float, text_h: float) -> tuple[float, float]:
+    """标签底色块左上角位置：默认紧贴框上方；上方出界（图片顶）则放框内左上。"""
+    if box_top - text_h - 2 >= 0:
+        return box_left, box_top - text_h - 2
+    return box_left + 2, box_top + 2
 
 
 def label_font_size(box_w: float, box_h: float) -> int:
@@ -158,22 +190,30 @@ class PreviewWindow(QDialog):
         self._scene.addItem(poly_item)
         self._frame_items.append(poly_item)
 
-        label = QGraphicsSimpleTextItem(frame_label(frame))
+        # 标签：半透明底色块 + 白字（高亮橙底加粗，dim 同步变淡）
+        text = frame_label(frame)
         rect = poly.boundingRect()
-        label.setBrush(QBrush(color))
         font = QFont()
         font.setPixelSize(label_font_size(rect.width(), rect.height()))
+        bg_color, text_color, bold = label_style(frame, state)
+        font.setBold(bold)
+        from PySide6.QtGui import QFontMetricsF
+        metrics = QFontMetricsF(font)
+        text_w = metrics.horizontalAdvance(text) + 4
+        text_h = metrics.height() + 2
+        lx, ly = label_placement(rect.left(), rect.top(), rect.width(),
+                                 rect.height(), text_w, text_h)
+        bg_item = self._scene.addRect(lx, ly, text_w, text_h,
+                                      QPen(Qt.NoPen), QBrush(bg_color))
+        label = QGraphicsSimpleTextItem(text)
+        label.setBrush(QBrush(text_color))
         label.setFont(font)
-        text_w = label.boundingRect().width()
-        # 框内放得下就放框内左上，否则放框外上方（F2 小框可读性）
-        if rect.width() >= text_w + 4:
-            label.setPos(rect.left() + 2, rect.top() + 2)
-        else:
-            label.setPos(rect.left(), rect.top() - label.boundingRect().height() - 2)
-        label.setVisible(self.markers_check.isChecked())
-        poly_item.setVisible(self.markers_check.isChecked())
-        self._scene.addItem(label)
-        self._frame_items.append(label)
+        label.setPos(lx + 2, ly + 1)
+        visible = self.markers_check.isChecked()
+        for item in (bg_item, label):
+            item.setVisible(visible)
+            self._frame_items.append(item)
+        poly_item.setVisible(visible)
 
     # ---- 视图操作 ----
 

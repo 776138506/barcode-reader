@@ -37,7 +37,7 @@ from ui.export_settings_dialog import ExportSettingsDialog  # noqa: E402
 from ui.formats_dialog import FormatsDialog  # noqa: E402
 from ui.preview_window import (Frame, PreviewWindow, build_frames,  # noqa: E402
                                frame_color, frame_label, frame_state,
-                               label_font_size)
+                               label_font_size, label_placement, label_style)
 from ui.history_dialog import HistoryDialog  # noqa: E402
 from ui.rename_dialog import RenameDialog  # noqa: E402
 
@@ -198,22 +198,24 @@ class PreviewLabel(QLabel):
             painter.setPen(QPen(color, 4 if state == "highlight" else 3))
             pts = [QPoint(int(x * sx), int(y * sy)) for x, y in frame.points]
             painter.drawPolygon(QPolygon(pts))
-            # 序号标签（F2）：字号随缩放自适应，框小放框外上方
+            # 标签（N: 内容）：半透明底色块 + 白字，紧贴框上方（出界放框内）
             text = frame_label(frame)
             xs = [p.x() for p in pts]
             ys = [p.y() for p in pts]
             box_w, box_h = max(xs) - min(xs), max(ys) - min(ys)
             font = QFont()
             font.setPixelSize(label_font_size(box_w, box_h))
+            bg_color, text_color, bold = label_style(frame, state)
+            font.setBold(bold)
             painter.setFont(font)
             metrics = QFontMetrics(font)
-            tw = metrics.horizontalAdvance(text)
-            if box_w >= tw + 4:
-                painter.drawText(min(xs) + 2, min(ys) + 2, tw, metrics.height(),
-                                 0, text)
-            else:
-                painter.drawText(min(xs), min(ys) - metrics.height() - 2, tw + 8,
-                                 metrics.height() + 4, 0, text)
+            tw = metrics.horizontalAdvance(text) + 4
+            th = metrics.height() + 2
+            lx, ly = label_placement(min(xs), min(ys), box_w, box_h, tw, th)
+            painter.fillRect(int(lx), int(ly), int(tw), int(th), bg_color)
+            painter.setPen(QPen(text_color, 1))
+            painter.drawText(int(lx) + 2, int(ly) + 1, int(tw) - 4, int(th) - 2,
+                             0, text)
         painter.end()
         self.setPixmap(pix)
 
