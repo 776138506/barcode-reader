@@ -36,8 +36,10 @@ from templates import TemplateStore, filter_from_dict, filter_to_dict  # noqa: E
 from ui.export_settings_dialog import ExportSettingsDialog  # noqa: E402
 from ui.formats_dialog import FormatsDialog  # noqa: E402
 from ui.preview_window import (Frame, PreviewWindow, build_frames,  # noqa: E402
-                               frame_color, frame_label, frame_state,
-                               label_font_size, label_placement, label_style)
+                               frame_angle, frame_color, frame_label,
+                               frame_state, label_font_size, label_placement,
+                               label_style, rotated_label_anchor,
+                               LABEL_ANGLE_THRESHOLD)
 from ui.history_dialog import HistoryDialog  # noqa: E402
 from ui.rename_dialog import RenameDialog  # noqa: E402
 
@@ -198,7 +200,7 @@ class PreviewLabel(QLabel):
             painter.setPen(QPen(color, 4 if state == "highlight" else 3))
             pts = [QPoint(int(x * sx), int(y * sy)) for x, y in frame.points]
             painter.drawPolygon(QPolygon(pts))
-            # 标签（N: 内容）：半透明底色块 + 白字，紧贴框上方（出界放框内）
+            # 标签（N: 内容）：半透明底色块 + 白字
             text = frame_label(frame)
             xs = [p.x() for p in pts]
             ys = [p.y() for p in pts]
@@ -211,6 +213,22 @@ class PreviewLabel(QLabel):
             metrics = QFontMetrics(font)
             tw = metrics.horizontalAdvance(text) + 4
             th = metrics.height() + 2
+            angle = frame_angle(frame)
+            if abs(angle) >= LABEL_ANGLE_THRESHOLD:
+                # 旋转码：标签沿长边方向排布（translate+rotate，底色随文字转）
+                spts = [(fx * sx, fy * sy) for fx, fy in frame.points]
+                sframe = Frame(points=spts, seq=frame.seq,
+                               suspect=frame.suspect, content=frame.content)
+                ax, ay, angle = rotated_label_anchor(
+                    sframe, angle, tw, th, pix.width(), pix.height())
+                painter.save()
+                painter.translate(ax, ay)
+                painter.rotate(angle)
+                painter.fillRect(0, 0, int(tw), int(th), bg_color)
+                painter.setPen(QPen(text_color, 1))
+                painter.drawText(2, 1, int(tw) - 4, int(th) - 2, 0, text)
+                painter.restore()
+                continue
             lx, ly = label_placement(min(xs), min(ys), box_w, box_h, tw, th)
             painter.fillRect(int(lx), int(ly), int(tw), int(th), bg_color)
             painter.setPen(QPen(text_color, 1))

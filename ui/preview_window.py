@@ -18,8 +18,9 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QPainter, QPen, QPixmap,
                            QPolygonF, QTransform)
-from PySide6.QtWidgets import (QCheckBox, QDialog, QGraphicsPixmapItem,
-                               QGraphicsPolygonItem, QGraphicsScene,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QGraphicsItemGroup,
+                               QGraphicsPixmapItem, QGraphicsPolygonItem,
+                               QGraphicsRectItem, QGraphicsScene,
                                QGraphicsSimpleTextItem, QGraphicsView,
                                QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
                                QWidget)
@@ -95,10 +96,63 @@ def label_style(frame: Frame, state: str) -> tuple[QColor, QColor, bool]:
 
 def label_placement(box_left: float, box_top: float, box_w: float, box_h: float,
                     text_w: float, text_h: float) -> tuple[float, float]:
-    """标签底色块左上角位置：默认紧贴框上方；上方出界（图片顶）则放框内左上。"""
+    """标签底色块左上角位置（水平码专用）：默认紧贴框上方；上方出界（图片顶）则放框内左上。"""
     if box_top - text_h - 2 >= 0:
         return box_left, box_top - text_h - 2
     return box_left + 2, box_top + 2
+
+
+# ---------------------------------------------------------------- 标签方向（D29）
+# zxing 角点约定（已实证，见 DECISIONS.md D29）：TL→TR 是码的阅读方向
+# （长边沿条带/码内容方向）。一维码 ±15° 小角度时角点近似轴对齐，
+# 由 LABEL_ANGLE_THRESHOLD 内保持水平兜底。
+
+LABEL_ANGLE_THRESHOLD = 5.0  # |角度| 小于此值按水平处理（与旧行为逐一致）
+
+
+def frame_angle(frame: Frame) -> float:
+    """码长边方向角（度，y 向下坐标系，Qt rotate 正方向=顺时针）。
+
+    取 TL→TR 边方向，归一化到 (-90, 90]：文字不倒置（左右/上下读均可读）。
+    """
+    (x1, y1), (x2, y2) = frame.points[0], frame.points[1]
+    angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+    if angle > 90.0:
+        angle -= 180.0
+    elif angle <= -90.0:
+        angle += 180.0
+    return angle
+
+
+def rotated_label_anchor(frame: Frame, angle: float,
+                         text_w: float, text_h: float,
+                         img_w: float, img_h: float, pad: float = 2.0,
+                         ) -> tuple[float, float, float]:
+    """旋转标签锚点（用于 translate+rotate 绘制）。
+
+    标签沿长边起点（TL）排布，沿长边法线向框外偏移 (text_h + pad)；
+    标签矩形出图片边界时翻到另一侧。返回 (x, y, angle)：绘制时
+    translate(x, y) 后 rotate(angle)，再在 (0,0)-(text_w,text_h) 画底与字。
+    """
+    (tx, ty) = frame.points[0]  # TL = 长边起点
+    th = math.radians(angle)
+    # 长边法线（两个候选方向），取背离框中心的一侧
+    cx = sum(p[0] for p in frame.points) / 4
+    cy = sum(p[1] for p in frame.points) / 4
+    nx, ny = math.sin(th), -math.cos(th)  # 边方向 (cos,sin) 的法线之一
+    if (cx - tx) * nx + (cy - ty) * ny > 0:
+        nx, ny = -nx, -ny
+    off = text_h + pad
+    x, y = tx + nx * off, ty + ny * off
+    # 标签四角（旋转后）边界检查，出界翻到另一侧
+    cos_t, sin_t = math.cos(th), math.sin(th)
+    corners = [(x, y),
+               (x + text_w * cos_t, y + text_w * sin_t),
+               (x + text_w * cos_t - text_h * sin_t, y + text_w * sin_t + text_h * cos_t),
+               (x - text_h * sin_t, y + text_h * cos_t)]
+    if any(px < 0 or px > img_w or py < 0 or py > img_h for px, py in corners):
+        x, y = tx - nx * off, ty - ny * off
+    return x, y, angle
 
 
 def label_font_size(box_w: float, box_h: float) -> int:
@@ -201,6 +255,29 @@ class PreviewWindow(QDialog):
         metrics = QFontMetricsF(font)
         text_w = metrics.horizontalAdvance(text) + 4
         text_h = metrics.height() + 2
+        angle = frame_angle(frame)
+        if abs(angle) >= LABEL_ANGLE_THRESHOLD:
+            # 旋转码：标签沿长边方向排布（组旋转，底色块随文字一起转）
+            img_w = self._pix_item.pixmap().width() if self._pix_item else 1e9
+            img_h = self._pix_item.pixmap().height() if self._pix_item else 1e9
+            ax, ay, angle = rotated_label_anchor(frame, angle, text_w, text_h,
+                                                 img_w, img_h)
+            group = QGraphicsItemGroup()
+            bg_item = QGraphicsRectItem(0, 0, text_w, text_h, group)
+            bg_item.setPen(QPen(Qt.NoPen))
+            bg_item.setBrush(QBrush(bg_color))
+            label = QGraphicsSimpleTextItem(text, group)
+            label.setBrush(QBrush(text_color))
+            label.setFont(font)
+            label.setPos(2, 1)
+            group.setPos(ax, ay)
+            group.setRotation(angle)
+            self._scene.addItem(group)
+            visible = self.markers_check.isChecked()
+            group.setVisible(visible)
+            poly_item.setVisible(visible)
+            self._frame_items.append(group)
+            return
         lx, ly = label_placement(rect.left(), rect.top(), rect.width(),
                                  rect.height(), text_w, text_h)
         bg_item = self._scene.addRect(lx, ly, text_w, text_h,
