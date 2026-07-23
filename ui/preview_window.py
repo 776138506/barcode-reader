@@ -16,8 +16,8 @@ import math
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import (QBrush, QColor, QFont, QPainter, QPen, QPixmap,
-                           QPolygonF, QTransform)
+from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QPainter,  # noqa: E402
+                           QPen, QPixmap, QPolygonF, QTransform)
 from PySide6.QtWidgets import (QCheckBox, QDialog, QGraphicsItemGroup,
                                QGraphicsPixmapItem, QGraphicsPolygonItem,
                                QGraphicsRectItem, QGraphicsScene,
@@ -160,38 +160,300 @@ def rotated_label_anchor(frame: Frame, angle: float,
     return x, y, angle
 
 
+# ---------------------------------------------------------------- 标签降级（D31）
+
+MIN_FONT_PX = 10.0  # 可读阈值：有效字高低于此值降级为徽标
+
+
+@dataclass
+class LabelLayout:
+    """单个标签的绘制布局（plan_label 产出）。"""
+    mode: str          # "full" 全长标签 | "badge" 紧凑徽标
+    text: str          # full: "N: 内容" / badge: "N" 或 "N?"
+    x: float
+    y: float
+    w: float
+    h: float
+    angle: float = 0.0
+
+
+def _rect_of(layout: LabelLayout) -> tuple[float, float, float, float]:
+    """布局的世界轴对齐矩形（旋转标签取四角 AABB，用于碰撞检测）。"""
+    if layout.angle == 0.0:
+        return (layout.x, layout.y, layout.x + layout.w, layout.y + layout.h)
+    t = math.radians(layout.angle)
+    e = (math.cos(t), math.sin(t))
+    m = (-math.sin(t), math.cos(t))
+    corners = [(layout.x + u * e[0] + v * m[0], layout.y + u * e[1] + v * m[1])
+               for u in (0.0, layout.w) for v in (0.0, layout.h)]
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _rects_collide(a, b) -> bool:
+    """矩形格式统一为 (x0, y0, x1, y1)。"""
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def plan_label(frame: Frame, text_w: float, text_h: float,
+               effective_font_px: float, img_w: float, img_h: float,
+               placed: list, pad: float = 2.0) -> LabelLayout:
+    """计算标签布局；以下任一条件触发时降级为紧凑徽标（D31）：
+
+    - 有效字高 < MIN_FONT_PX（小缩放比下不可读）
+    - 渲染矩形超出图片边界（翻转后仍出界）
+    - 与已绘制标签碰撞（先画的保留全长，后冲突的降级）
+
+    placed 为本轮已确认的全长标签矩形（就地追加）。badge 锚在框角内侧左上。
+    """
+    angle = frame_angle(frame)
+    if abs(angle) < LABEL_ANGLE_THRESHOLD:
+        xs = [p[0] for p in frame.points]
+        ys = [p[1] for p in frame.points]
+        box_w = max(xs) - min(xs)
+        box_h = max(ys) - min(ys)
+        lx, ly = label_placement(min(xs), min(ys), box_w, box_h, text_w, text_h)
+        # 水平长标签收进界内（旧行为允许溢出，改为平移收边；放不下才降级）
+        if text_w <= img_w:
+            lx = min(max(lx, 0.0), img_w - text_w)
+        else:
+            lx = 0.0
+        layout = LabelLayout(mode="full", text=frame_label(frame),
+                             x=lx, y=ly, w=text_w, h=text_h, angle=0.0)
+    else:
+        ax, ay, angle = rotated_label_anchor(frame, angle, text_w, text_h,
+                                             img_w, img_h, pad)
+        layout = LabelLayout(mode="full", text=frame_label(frame),
+                             x=ax, y=ay, w=text_w, h=text_h, angle=angle)
+
+    rect = _rect_of(layout)
+    out_of_bounds = (rect[0] < 0 or rect[2] > img_w
+                     or rect[1] < 0 or rect[3] > img_h)
+    collide = any(_rects_collide(rect, r) for r in placed)
+    if effective_font_px >= MIN_FONT_PX and not out_of_bounds and not collide:
+        placed.append(rect)
+        return layout
+
+    # 降级：紧凑徽标，锚在框角内侧（左上）
+    xs = [p[0] for p in frame.points]
+    ys = [p[1] for p in frame.points]
+    badge_text = f"{frame.seq}{'?' if frame.suspect else ''}"
+    badge_w = min(text_w, 8 * len(badge_text) + 10)
+    return LabelLayout(mode="badge", text=badge_text,
+                       x=min(xs) + 2, y=min(ys) + 2,
+                       w=badge_w, h=text_h, angle=0.0)
+
+
 def label_font_size(box_w: float, box_h: float) -> int:
     """序号字号随框大小自适应，下限 10 保证小图可读。"""
     return max(10, min(28, int(min(box_w, box_h) * 0.45)))
 
 
-# ---------------------------------------------------------------- F1 独立预览窗口
+# ---------------------------------------------------------------- 统一预览组件（D32）
 
-class _ZoomView(QGraphicsView):
-    """滚轮缩放 + 拖拽平移的 QGraphicsView。"""
+class PreviewView(QGraphicsView):
+    """统一预览组件：主预览（嵌入模式）与 F1 独立窗口共用渲染。
 
-    def __init__(self, scene, owner):
-        super().__init__(scene, owner)
-        self._owner = owner
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+    - Frame 标记四态样式 + plan_label 自适应降级（碰撞/出界/字高不足 → 徽标）
+    - 嵌入模式（interactive=False，主预览）：适应窗口、无滚动条、无缩放平移
+      交互，保留单击（清高亮）/双击（on_double_click）回调
+    - F1 模式（interactive=True）：滚轮缩放、拖拽平移、90° 步进旋转
+    - 缩放/尺寸变化实时重算降级布局
+    """
+
+    def __init__(self, parent=None, interactive: bool = False):
+        super().__init__(parent)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        self.setFrameShape(QGraphicsView.NoFrame)
+        self._interactive = interactive
+        self._frames: list[Frame] = []
+        self._highlight_content: str | None = None
+        self._pix_item: QGraphicsPixmapItem | None = None
+        self._frame_items: list = []
+        self._message_item = None
+        self._rotation = 0
+        self._markers_visible = True
+        self.on_blank_click = None
+        self.on_double_click = None
+        # 拖放纪律（D07）：组件与 viewport 一律不拦截
+        self.setAcceptDrops(False)
+        self.viewport().setAcceptDrops(False)
+        if interactive:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+        else:
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+    # ---- 数据 ----
+
+    def set_image(self, pixmap: QPixmap, frames: list[Frame]):
+        self._scene.clear()
+        self._frames = frames
+        self._frame_items = []
+        self._message_item = None
+        self._pix_item = self._scene.addPixmap(pixmap)
+        self._rebuild()
+        self.fit()
+
+    def set_frames(self, frames: list[Frame]):
+        self._frames = frames
+        self._rebuild()
+
+    def set_highlight(self, content: str | None):
+        self._highlight_content = content
+        self._rebuild()
+
+    def set_message(self, text: str):
+        """占位提示（加载失败/空态）。"""
+        self._scene.clear()
+        self._frames = []
+        self._frame_items = []
+        self._pix_item = None
+        self._message_item = self._scene.addText(text)
+        self.fit()
+
+    def message(self) -> str:
+        return self._message_item.toPlainText() if self._message_item else ""
+
+    def clear_image(self):
+        self._frames = []
+        self._highlight_content = None
+        self.set_message("预览区")
+
+    def set_markers_visible(self, visible: bool):
+        self._markers_visible = visible
+        for item in self._frame_items:
+            item.setVisible(visible)
+
+    # 兼容旧 PreviewLabel 测试接口
+    def pixmap(self) -> QPixmap:
+        """无图（空态/加载失败）时返回空 QPixmap；有图时返回当前渲染视图。"""
+        if self._pix_item is None:
+            return QPixmap()
+        return self.grab()
+
+    def text(self) -> str:
+        return self.message()
+
+    # ---- 渲染 ----
+
+    def _effective_font_scale(self) -> float:
+        t = self.transform()
+        s = math.hypot(t.m11(), t.m12())
+        return s if s > 0 else 1.0
+
+    def _rebuild(self):
+        for item in list(self._frame_items):
+            self._scene.removeItem(item)
+        self._frame_items = []
+        if self._pix_item is None:
+            return
+        img_w = self._pix_item.pixmap().width()
+        img_h = self._pix_item.pixmap().height()
+        placed: list = []
+        for frame in self._frames:
+            self._add_frame(frame, img_w, img_h, placed)
+
+    def _add_frame(self, frame: Frame, img_w: float, img_h: float, placed: list):
+        state = frame_state(frame, self._highlight_content)
+        color = frame_color(frame, state)
+        poly = QPolygonF([QPointF(x, y) for x, y in frame.points])
+        poly_item = QGraphicsPolygonItem(poly)
+        poly_item.setPen(QPen(color, 4 if state == "highlight" else 3))
+        poly_item.setBrush(QBrush(Qt.NoBrush))
+        poly_item.setVisible(self._markers_visible)
+        self._scene.addItem(poly_item)
+        self._frame_items.append(poly_item)
+
+        # 标签布局（含降级判定，D31）：样式仍走 label_style 单一来源
+        rect = poly.boundingRect()
+        font = QFont()
+        font.setPixelSize(label_font_size(rect.width(), rect.height()))
+        bg_color, text_color, bold = label_style(frame, state)
+        font.setBold(bold)
+        metrics = QFontMetricsF(font)
+        text_w = metrics.horizontalAdvance(frame_label(frame)) + 4
+        text_h = metrics.height() + 2
+        eff_px = font.pixelSize() * self._effective_font_scale()
+        layout = plan_label(frame, text_w, text_h, eff_px, img_w, img_h, placed)
+        if layout.mode == "badge":
+            layout.w = metrics.horizontalAdvance(layout.text) + 6
+        group = QGraphicsItemGroup()
+        bg = QGraphicsRectItem(0, 0, layout.w, layout.h, group)
+        bg.setPen(QPen(Qt.NoPen))
+        bg.setBrush(QBrush(bg_color))
+        label = QGraphicsSimpleTextItem(layout.text, group)
+        label.setBrush(QBrush(text_color))
+        label.setFont(font)
+        label.setPos(2, 1)
+        group.setPos(layout.x, layout.y)
+        if layout.angle:
+            group.setRotation(layout.angle)
+        group.setVisible(self._markers_visible)
+        self._scene.addItem(group)
+        self._frame_items.append(group)
+
+    # ---- 视图操作 ----
+
+    def fit(self):
+        if self._pix_item is not None:
+            self.fitInView(self._pix_item, Qt.KeepAspectRatio)
+        elif self._message_item is not None:
+            self.fitInView(self._message_item, Qt.KeepAspectRatio)
+        self._rebuild()  # 缩放变化后重算降级布局
+
+    def _current_scale(self) -> float:
+        return self._effective_font_scale()
+
+    def _apply(self, scale: float):
+        self.setTransform(QTransform().rotate(self._rotation).scale(scale, scale))
+        self._rebuild()
+
+    def zoom_by(self, factor: float):
+        self._apply(self._current_scale() * factor)
+
+    def zoom_100(self):
+        self._apply(1.0)
+
+    def rotate_by(self, degrees: float):
+        self._rotation += degrees
+        self._apply(self._current_scale())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._interactive:
+            self.fit()
 
     def wheelEvent(self, event):
-        self._owner.zoom_by(1.25 if event.angleDelta().y() > 0 else 0.8)
+        if self._interactive:
+            self.zoom_by(1.25 if event.angleDelta().y() > 0 else 0.8)
+        else:
+            super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        # 点击空白恢复常态（清除高亮）
+        if self._highlight_content is not None:
+            self.set_highlight(None)
+            if callable(self.on_blank_click):
+                self.on_blank_click()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if callable(self.on_double_click):
+            self.on_double_click()
+        super().mouseDoubleClickEvent(event)
 
 
 class PreviewWindow(QDialog):
-    """独立预览窗口（非模态）：缩放/旋转/平移 + 标记开关 + 高亮跟随。"""
+    """F1 独立预览窗口（非模态）：PreviewView(interactive=True) + 工具栏。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("预览")
         self.resize(900, 700)
-        self._rotation = 0
-        self._frames: list[Frame] = []
-        self._highlight_content: str | None = None
-        self._frame_items: list = []
-        self._pix_item: QGraphicsPixmapItem | None = None
 
         bar = QHBoxLayout()
         for text, slot in (("适应窗口", self.fit), ("100%", self.zoom_100),
@@ -206,116 +468,49 @@ class PreviewWindow(QDialog):
         bar.addWidget(self.markers_check)
         bar.addStretch(1)
 
-        self._scene = QGraphicsScene(self)
-        self._view = _ZoomView(self._scene, self)
-
+        self._view = PreviewView(self, interactive=True)
         layout = QVBoxLayout(self)
         layout.addLayout(bar)
         layout.addWidget(self._view, stretch=1)
 
-    # ---- 数据 ----
+    # ---- 数据（转发到 PreviewView）----
+
+    @property
+    def _frames(self) -> list[Frame]:
+        return self._view._frames
+
+    @property
+    def _frame_items(self) -> list:
+        return self._view._frame_items
+
+    @property
+    def _scene(self) -> QGraphicsScene:
+        return self._view._scene
+
+    @property
+    def _highlight_content(self) -> str | None:
+        return self._view._highlight_content
 
     def set_image(self, title: str, pixmap: QPixmap, frames: list[Frame],
                   highlight_content: str | None = None):
-        """设置图片与标记帧（列表切换时跟随调用）。"""
+        """设置图片与标记帧（列表切换时跟随调用）。换图重置高亮态。"""
         self.setWindowTitle(f"预览 - {title}")
-        self._frames = frames
-        self._highlight_content = highlight_content
-        self._scene.clear()
-        self._frame_items = []
-        self._pix_item = self._scene.addPixmap(pixmap)
-        self._rebuild_frame_items()
-        self.fit()
+        self._view.set_image(pixmap, frames)
+        self._view.set_highlight(highlight_content)
 
     def set_highlight(self, content: str | None):
-        self._highlight_content = content
-        self._rebuild_frame_items()
-
-    def _rebuild_frame_items(self):
-        for item in self._frame_items:
-            self._scene.removeItem(item)
-        self._frame_items = []
-        for frame in self._frames:
-            self._add_frame_items(frame)
-
-    def _add_frame_items(self, frame: Frame):
-        state = frame_state(frame, self._highlight_content)
-        color = frame_color(frame, state)
-        width = 4 if state == "highlight" else 3
-        poly = QPolygonF([QPointF(x, y) for x, y in frame.points])
-        poly_item = QGraphicsPolygonItem(poly)
-        poly_item.setPen(QPen(color, width))
-        poly_item.setBrush(QBrush(Qt.NoBrush))
-        self._scene.addItem(poly_item)
-        self._frame_items.append(poly_item)
-
-        # 标签：半透明底色块 + 白字（高亮橙底加粗，dim 同步变淡）
-        text = frame_label(frame)
-        rect = poly.boundingRect()
-        font = QFont()
-        font.setPixelSize(label_font_size(rect.width(), rect.height()))
-        bg_color, text_color, bold = label_style(frame, state)
-        font.setBold(bold)
-        from PySide6.QtGui import QFontMetricsF
-        metrics = QFontMetricsF(font)
-        text_w = metrics.horizontalAdvance(text) + 4
-        text_h = metrics.height() + 2
-        angle = frame_angle(frame)
-        if abs(angle) >= LABEL_ANGLE_THRESHOLD:
-            # 旋转码：标签沿长边方向排布（组旋转，底色块随文字一起转）
-            img_w = self._pix_item.pixmap().width() if self._pix_item else 1e9
-            img_h = self._pix_item.pixmap().height() if self._pix_item else 1e9
-            ax, ay, angle = rotated_label_anchor(frame, angle, text_w, text_h,
-                                                 img_w, img_h)
-            group = QGraphicsItemGroup()
-            bg_item = QGraphicsRectItem(0, 0, text_w, text_h, group)
-            bg_item.setPen(QPen(Qt.NoPen))
-            bg_item.setBrush(QBrush(bg_color))
-            label = QGraphicsSimpleTextItem(text, group)
-            label.setBrush(QBrush(text_color))
-            label.setFont(font)
-            label.setPos(2, 1)
-            group.setPos(ax, ay)
-            group.setRotation(angle)
-            self._scene.addItem(group)
-            visible = self.markers_check.isChecked()
-            group.setVisible(visible)
-            poly_item.setVisible(visible)
-            self._frame_items.append(group)
-            return
-        lx, ly = label_placement(rect.left(), rect.top(), rect.width(),
-                                 rect.height(), text_w, text_h)
-        bg_item = self._scene.addRect(lx, ly, text_w, text_h,
-                                      QPen(Qt.NoPen), QBrush(bg_color))
-        label = QGraphicsSimpleTextItem(text)
-        label.setBrush(QBrush(text_color))
-        label.setFont(font)
-        label.setPos(lx + 2, ly + 1)
-        self._scene.addItem(label)  # 必须显式入 scene（addRect 只负责底色块）
-        visible = self.markers_check.isChecked()
-        for item in (bg_item, label):
-            item.setVisible(visible)
-            self._frame_items.append(item)
-        poly_item.setVisible(visible)
+        self._view.set_highlight(content)
 
     # ---- 视图操作 ----
 
-    def _current_scale(self) -> float:
-        t = self._view.transform()
-        return math.hypot(t.m11(), t.m12())
-
-    def _apply(self, scale: float):
-        self._view.setTransform(QTransform().rotate(self._rotation).scale(scale, scale))
-
     def fit(self):
-        if self._pix_item is not None:
-            self._view.fitInView(self._pix_item, Qt.KeepAspectRatio)
+        self._view.fit()
 
     def zoom_100(self):
-        self._apply(1.0)
+        self._view.zoom_100()
 
     def zoom_by(self, factor: float):
-        self._apply(self._current_scale() * factor)
+        self._view.zoom_by(factor)
 
     def zoom_in(self):
         self.zoom_by(1.25)
@@ -324,13 +519,10 @@ class PreviewWindow(QDialog):
         self.zoom_by(0.8)
 
     def rotate_left(self):
-        self._rotation -= 90
-        self._apply(self._current_scale())
+        self._view.rotate_by(-90)
 
     def rotate_right(self):
-        self._rotation += 90
-        self._apply(self._current_scale())
+        self._view.rotate_by(90)
 
     def _on_markers_toggled(self, checked: bool):
-        for item in self._frame_items:
-            item.setVisible(checked)
+        self._view.set_markers_visible(checked)

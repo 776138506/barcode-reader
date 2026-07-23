@@ -3,11 +3,12 @@
 > 新会话接手时先读本文件和 `../AGENTS.md`、`DECISIONS.md`，再动代码。
 > 本文件随每轮工作结束更新「当前状态」和「排队清单」两节。
 
-更新于：2026-07-23（本轮：旋转标签 frame-relative 锚点修复 D30 + 测试引用环治理 + README 双轨化）
+更新于：2026-07-23（本轮：主预览渲染统一 D32 + 标签自适应降级 D31 + CI/Release workflows）
 
 ## 当前状态
 
-- **测试**:128 passed（`pytest tests/ -q`，约 22s，含 1 个 ~12s slow 真实图验收）;offscreen 冒烟 `tests/smoke_gui.py` → SMOKE OK;`tests/test_requirements.py` 守护依赖声明完整性;`tests/conftest.py` autouse 逐测 GC（防隐藏窗口引用环累积致 offscreen 崩溃，D30）
+- **测试**:135 passed（`pytest tests/ -q`，约 23s，含 1 个 ~12s slow 真实图验收）;offscreen 冒烟 `tests/smoke_gui.py` → SMOKE OK;`tests/test_requirements.py` 守护依赖声明完整性;`tests/conftest.py` autouse 逐测 GC（防隐藏窗口引用环累积致 offscreen 崩溃，D30）
+- **CI/CD**:`.github/workflows/ci.yml`（push main/PR，三平台 × Python 3.14，Linux 装 X11/GL,offscreen pytest + 冒烟）;`.github/workflows/release.yml`（v* 标签，三平台 build.py 打包 → zip/tar → gh release,**尚未实机运行，首轮结果待观察**）
 - **功能**:批量导入（拖放/文件对话框/剪贴板粘贴）、全码制识别（zxing-cpp)、分层管线 v2+L3 区域层（签名共识误识防护，真实图 5/5）、命中位置反变换、DecodeProfile 参数化（pre/l1/l2/l3/consensus 五组全开放，默认零变化）+ 识别档案池（内置默认可恢复）+ 导出模板池（4 个内置预设）、**识别框全局编号（疑似黄框）+ 点击高亮橙框 + F1 独立预览窗口（缩放/旋转/平移/标记开关）**、识别框高亮预览、识别控制项（三档/码制白名单/疑似码/单图增强重扫，与档案正交）、去重视图+计数、SQLite 历史库+搜索、按码重命名、两段式模板导出 + XLSX/JSON + 导出过滤 + 按模板复制到剪贴板、状态持久化、轮转日志、中文界面
 - **数据**:SQLite 库含 `records` + `strategy_log` 两表；数据目录新增 `profiles.json`（识别档案池）与 `templates.json`（导出模板池，首跑写入 4 个内置预设）；真实验证集起步：`tests/images/real_drug_labels.png`
 - **打包**:`python build.py` → PyInstaller;2026-07-23 已重打 `dist/BarcodeReader.app`(120MB,98 测试全绿后构建，offscreen 启动验证通过、无翻译警告，D24)
@@ -47,6 +48,7 @@
 | 分层管线 | `../decoder.py` |
 | 策略日志表 | `../history.py` `strategy_log` |
 | 项目门面 | `../README.md`（定位/亮点/快速开始/文档地图） |
+| CI/Release | `../.github/workflows/ci.yml` / `release.yml` |
 
 ## 协作规则摘要（详见 ~/.agents/AGENTS.md）
 

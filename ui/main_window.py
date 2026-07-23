@@ -35,7 +35,7 @@ from renamer import execute_rename  # noqa: E402
 from templates import TemplateStore, filter_from_dict, filter_to_dict  # noqa: E402
 from ui.export_settings_dialog import ExportSettingsDialog  # noqa: E402
 from ui.formats_dialog import FormatsDialog  # noqa: E402
-from ui.preview_window import (Frame, PreviewWindow, build_frames,  # noqa: E402
+from ui.preview_window import (Frame, PreviewView, PreviewWindow, build_frames,  # noqa: E402
                                frame_angle, frame_color, frame_label,
                                frame_state, label_font_size, label_placement,
                                label_style, rotated_label_anchor,
@@ -123,119 +123,23 @@ class _DecodeWorker(QRunnable):
             self.signals.finished.emit(self.path, [], str(exc), {})
 
 
-class PreviewLabel(QLabel):
-    """等比缩放显示图片并绘制标记帧（F2 编号/疑似黄框，F3 高亮/变淡）。"""
+class PreviewArea(PreviewView):
+    """主预览区：PreviewView 嵌入模式（统一渲染，D32）+ 按路径加载图片。"""
 
     def __init__(self):
-        super().__init__()
-        self.setAlignment(Qt.AlignCenter)
+        super().__init__(None, interactive=False)
         self.setMinimumSize(320, 240)
-        self.setText("预览区")
-        self._image: QImage | None = None
-        self._frames: list[Frame] = []
-        self._highlight_content: str | None = None
-        self.double_clicked = None  # 双击回调（MainWindow 注入打开 F1）
 
     def show_image(self, path: str, frames: list[Frame]):
-        image = QImage(path)
-        if image.isNull():
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
             # 加载失败必须清空旧内容并明示，否则预览区残留上一张图（看似"失效/串图"）
             logger.warning("预览加载失败: %s", path)
-            self._image = None
-            self._frames = []
-            self.setPixmap(QPixmap())
-            self.setText(f"无法加载图片:\n{path}")
+            self.set_message(f"无法加载图片:\n{path}")
             return
-        self._image = image
-        self._frames = frames
         # 换图恢复常态（清除点击高亮，F3）
         self._highlight_content = None
-        self._repaint()
-
-    def set_frames(self, frames: list[Frame]):
-        """图片不变，仅刷新标记帧（解码完成后补画）。"""
-        self._frames = frames
-        self._repaint()
-
-    def set_highlight(self, content: str | None):
-        self._highlight_content = content
-        self._repaint()
-
-    def clear_image(self):
-        self._image = None
-        self._frames = []
-        self._highlight_content = None
-        self.setPixmap(QPixmap())
-        self.setText("预览区")
-
-    def mousePressEvent(self, event):
-        # 点击空白区恢复常态（清除高亮）
-        if self._highlight_content is not None:
-            self.set_highlight(None)
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        # 双击预览区打开 F1 独立预览窗口
-        if callable(self.double_clicked):
-            self.double_clicked()
-        super().mouseDoubleClickEvent(event)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._repaint()
-
-    def _repaint(self):
-        if self._image is None or self._image.isNull():
-            return
-        from PySide6.QtGui import QPainter, QPen, QColor, QPolygon, QFont, QFontMetrics
-        from PySide6.QtCore import QPoint
-        pix = QPixmap.fromImage(self._image).scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        sx = pix.width() / self._image.width()
-        sy = pix.height() / self._image.height()
-        painter = QPainter(pix)
-        for frame in self._frames:
-            state = frame_state(frame, self._highlight_content)
-            color = frame_color(frame, state)
-            painter.setPen(QPen(color, 4 if state == "highlight" else 3))
-            pts = [QPoint(int(x * sx), int(y * sy)) for x, y in frame.points]
-            painter.drawPolygon(QPolygon(pts))
-            # 标签（N: 内容）：半透明底色块 + 白字
-            text = frame_label(frame)
-            xs = [p.x() for p in pts]
-            ys = [p.y() for p in pts]
-            box_w, box_h = max(xs) - min(xs), max(ys) - min(ys)
-            font = QFont()
-            font.setPixelSize(label_font_size(box_w, box_h))
-            bg_color, text_color, bold = label_style(frame, state)
-            font.setBold(bold)
-            painter.setFont(font)
-            metrics = QFontMetrics(font)
-            tw = metrics.horizontalAdvance(text) + 4
-            th = metrics.height() + 2
-            angle = frame_angle(frame)
-            if abs(angle) >= LABEL_ANGLE_THRESHOLD:
-                # 旋转码：标签沿长边方向排布（translate+rotate，底色随文字转）
-                spts = [(fx * sx, fy * sy) for fx, fy in frame.points]
-                sframe = Frame(points=spts, seq=frame.seq,
-                               suspect=frame.suspect, content=frame.content)
-                ax, ay, angle = rotated_label_anchor(
-                    sframe, angle, tw, th, pix.width(), pix.height())
-                painter.save()
-                painter.translate(ax, ay)
-                painter.rotate(angle)
-                painter.fillRect(0, 0, int(tw), int(th), bg_color)
-                painter.setPen(QPen(text_color, 1))
-                painter.drawText(2, 1, int(tw) - 4, int(th) - 2, 0, text)
-                painter.restore()
-                continue
-            lx, ly = label_placement(min(xs), min(ys), box_w, box_h, tw, th)
-            painter.fillRect(int(lx), int(ly), int(tw), int(th), bg_color)
-            painter.setPen(QPen(text_color, 1))
-            painter.drawText(int(lx) + 2, int(ly) + 1, int(tw) - 4, int(th) - 2,
-                             0, text)
-        painter.end()
-        self.setPixmap(pix)
+        self.set_image(pixmap, frames)
 
 
 class MainWindow(QMainWindow):
@@ -321,9 +225,8 @@ class MainWindow(QMainWindow):
         # 右侧：预览 + 结果表格
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        self.preview = PreviewLabel()
-        self.preview.setAcceptDrops(False)
-        self.preview.double_clicked = self.open_preview_window
+        self.preview = PreviewArea()
+        self.preview.on_double_click = self.open_preview_window
         right_layout.addWidget(self.preview, stretch=3)
         self.table = QTableWidget(0, 4)
         self.table.setAcceptDrops(False)

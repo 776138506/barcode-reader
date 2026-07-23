@@ -98,8 +98,10 @@ def test_preview_draws_seq_and_suspect_yellow(qapp, tmp_path):
     pix = win.preview.pixmap()
     assert _count_color(pix, _is_green) > 50
 
-    # 构造含疑似码的帧，黄框应出现
-    frames = [Frame(points=[(10, 10), (60, 10), (60, 60), (10, 60)],
+    # 构造含疑似码的帧，黄框应出现（白底图 + 大框，避免降级与亚像素）
+    from PySide6.QtGui import QPixmap
+    win.preview.set_image(QPixmap(300, 300), [])
+    frames = [Frame(points=[(20, 40), (220, 40), (220, 200), (20, 200)],
                     seq=9, suspect=True, content="SUS")]
     win.preview.set_frames(frames)
     qapp.processEvents()

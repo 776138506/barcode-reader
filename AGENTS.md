@@ -14,7 +14,7 @@
 ```bash
 source .venv/bin/activate        # 所有依赖只装进 .venv，禁止污染系统 Python
 python main.py                   # 运行
-pytest tests/ -q                 # 测试（当前 128 个，含 1 个 ~12s 的 slow 真实图验收）
+pytest tests/ -q                 # 测试（当前 135 个，含 1 个 ~12s 的 slow 真实图验收）
 QT_QPA_PLATFORM=offscreen python tests/smoke_gui.py   # 无头 GUI 冒烟
 python build.py                  # PyInstaller 打包（不能交叉编译，须在目标平台执行）
 ```
@@ -38,7 +38,7 @@ python build.py                  # PyInstaller 打包（不能交叉编译，须
 - 测试用 QMimeData 构造 urls 直接调用事件处理函数模拟拖放（见 `tests/test_dragdrop.py` / `tests/smoke_gui.py`）
 - `PreviewLabel.show_image` 加载失败必须清空旧 pixmap 并显示提示——残留上一张图会被用户当成"预览失效/串图"（回归测试 `tests/test_preview.py`）
 - **对话框高度必须考虑小屏幕**：内容多的自定义对话框一律用 `ui/scroll_helper.py` 的 `wrap_scrollable()`（内容进 QScrollArea、按钮栏固定在外）+ `cap_dialog_height()`（上限 = 光标所在屏可用高度 × 0.8）；新增对话框对照 `tests/test_dialogs.py` 补断言
-- **标记帧统一走 `ui/preview_window.py` 的 Frame 模型**：主预览（PreviewLabel）与 F1 窗口共用 `build_frames/frame_label/label_style/label_placement/frame_angle/rotated_label_anchor/frame_color/frame_state`——标签为 `N: 内容`（疑似 `N?: 内容`，>24 字符截断加 …，阈值不随缩放变）；**标签方向与码长边对齐**（TL→TR 阅读方向角归一化 (-90,90]，<5° 走水平旧路径；锚点沿长边起点、法线向外、出界翻侧）；底色块视觉规范：普通黑 65% + 白字、疑似深黄 65% + 白字、高亮橙底不透明 + 白字加粗、dim 底 40/字 60；框序号 = 结果表格「序号」列（跨图累加，`MainWindow._frames_for()`）；结果表格垂直行号表头一律隐藏（与「序号」列重复）
+- **标记帧统一走 `ui/preview_window.py` 的 Frame 模型**：渲染统一为 `PreviewView(QGraphicsView)`（D32，主预览嵌入模式 + F1 交互模式共用），共享 `build_frames/frame_label/label_style/label_placement/frame_angle/rotated_label_anchor/plan_label/frame_color/frame_state`——标签为 `N: 内容`（疑似 `N?: 内容`，>24 字符截断加 …）；标签方向与码长边对齐（<5° 走水平旧路径）；**自适应降级（D31）**：有效字高 <10px / 出界 / 与已绘制标签碰撞 → 紧凑徽标 `N`/`N?`（碰撞只降级后画者，水平长标签先平移收边）；底色块视觉规范：普通黑 65% + 白字、疑似深黄 65% + 白字、高亮橙底不透明 + 白字加粗、dim 底 40/字 60；框序号 = 结果表格「序号」列（跨图累加，`MainWindow._frames_for()`）；结果表格垂直行号表头一律隐藏（与「序号」列重复）
 - **用户操作反馈三档（D25）**：成功 = 状态栏带量化信息（条数/字符数/名称，8s）；空态/可预期失败 = 状态栏提示或 `QMessageBox.warning`（阻断性操作用弹窗）；异常失败 = `logger.exception` + 弹窗（导出）或列表项状态（解码）。禁止静默吞异常（catch 必须记日志或给用户反馈），新增按钮动作对照 `tests/test_feedback.py` 补断言
 - **调试脚本不得对 `tests/images/` 里的原始测试图执行重命名等破坏性操作**——重命名只对 tmp 副本进行（曾有调试脚本把 qr_hello.png 改名导致测试图缺失）
 
@@ -53,12 +53,14 @@ profiles.py                # DecodeProfile 档案池（profiles.json）
 templates.py               # 导出模板池（templates.json + 内置预设）
 ui/main_window.py          # 主窗口：文件列表、预览高亮、结果表格（含去重视图）、模板编辑、导出、识别设置行（档案/档位/码制/疑似码）
 ui/profile_dialog.py       # 识别参数档案编辑（PRE/L1/L2/L3/共识 全开放，QScrollArea 小屏适配）
-ui/preview_window.py       # F1 独立预览窗口 + 标记帧模型（Frame/编号/配色/高亮，主预览共用）
+ui/preview_window.py       # 统一预览组件 PreviewView（主预览嵌入/F1 交互）+ F1 薄壳 + 标记帧模型 + plan_label 降级
 ui/scroll_helper.py        # 对话框小屏适配（QScrollArea 包装 + 高度上限）
 ui/history_dialog.py       # 历史记录面板（SQLite 搜索/载入/复制）
 ui/rename_dialog.py        # 按码重命名确认对话框（模板 + 预览）
 ui/export_settings_dialog.py  # 导出设置（两段式 + 过滤）
 ui/formats_dialog.py       # 码制白名单勾选对话框
+.github/workflows/ci.yml   # CI：三平台 × Python 3.14 offscreen pytest + 冒烟
+.github/workflows/release.yml  # 标签触发三平台打包并挂 Release
 tests/                     # pytest + gen_test_images.py + smoke_gui.py
 build.py                   # PyInstaller 打包脚本
 ```

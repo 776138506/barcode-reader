@@ -11,6 +11,7 @@ import pytest  # noqa: E402
 from PySide6.QtCore import QSettings  # noqa: E402
 from PySide6.QtGui import QColor, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGraphicsRectItem, QGraphicsSimpleTextItem  # noqa: E402
+from PySide6.QtWidgets import QGraphicsItemGroup  # noqa: E402
 
 from profiles import ProfileStore  # noqa: E402
 from templates import TemplateStore  # noqa: E402
@@ -138,10 +139,14 @@ def test_f1_label_items_consistent(qapp, tmp_path):
 
     frames = pw._frames
     assert len(frames) == 1
-    # 每帧 3 个 item：多边形 + 底色矩形 + 文本
-    assert len(pw._frame_items) == 3
-    texts = [i for i in pw._frame_items if isinstance(i, QGraphicsSimpleTextItem)]
-    rects = [i for i in pw._frame_items if isinstance(i, QGraphicsRectItem)]
+    # 每帧 2 个顶层 item：多边形 + 标签组（底色矩形与文本在组内）
+    assert len(pw._frame_items) == 2
+    groups = [i for i in pw._frame_items if isinstance(i, QGraphicsItemGroup)]
+    assert len(groups) == 1
+    texts = [i for i in groups[0].childItems()
+             if isinstance(i, QGraphicsSimpleTextItem)]
+    rects = [i for i in groups[0].childItems()
+             if isinstance(i, QGraphicsRectItem)]
     assert len(texts) == 1 and len(rects) == 1
     # 文本与主预览同源（同一 frame_label）
     assert texts[0].text() == frame_label(frames[0])
@@ -149,10 +154,12 @@ def test_f1_label_items_consistent(qapp, tmp_path):
     bg, _, _ = label_style(frames[0], "normal")
     assert rects[0].brush().color() == bg
 
-    # 高亮态：底色矩形变橙
+    # 高亮态：底色矩形变橙（在标签组子项里找）
     pw.set_highlight(frames[0].content)
     qapp.processEvents()
-    rects_h = [i for i in pw._frame_items if isinstance(i, QGraphicsRectItem)]
+    groups_h = [i for i in pw._frame_items if isinstance(i, QGraphicsItemGroup)]
+    rects_h = [i for i in groups_h[0].childItems()
+               if isinstance(i, QGraphicsRectItem)]
     assert rects_h[0].brush().color().red() == 255
     assert rects_h[0].brush().color().alpha() == 255
     pw.close()
