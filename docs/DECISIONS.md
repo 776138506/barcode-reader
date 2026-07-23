@@ -1,0 +1,179 @@
+# 决策日志（Decision Log）
+
+记录 BarcodeReader 所有关键决策点。格式：背景 → 决策 → 弃项 → 后果。
+新增决策时在末尾追加，编号递增，**禁止修改历史条目**（决策变质就加新条目说明推翻原因）。
+
+---
+
+## D01 技术栈：PySide6 + zxing-cpp + Pillow（2026-07-22）
+
+- **背景**：需要跨平台桌面 GUI + 全码制解码。
+- **决策**:GUI 用 PySide6；解码用 zxing-cpp（pip 纯 wheel）；图像处理用 Pillow + numpy。
+- **弃项**:pyzbar（码制支持不如 zxing-cpp 全，依赖系统 zbar 动态库；保留为后备方案）；Electron/Tauri（用户选定 Python 桌面应用）。
+- **后果**:Python 3.14 上 zxing-cpp 3.1.0 有现成 wheel；依赖仅 3 个包。
+
+## D02 不使用 OpenCV（2026-07-22）
+
+- **背景**:OpenCV 本是预处理首选。
+- **决策**：全面弃用，预处理（灰度/均衡/CLAHE/缩放/旋转）用 Pillow + numpy 实现。
+- **弃项原因**:① cv2 bootstrap 与 PyInstaller 冻结导入器存在结构性冲突（二次 import 死循环，降级 4.13 仍复现）;② Windows 下 `cv2.imread` 无法读非 ASCII 路径，Pillow 宽字符 API 天然兼容。
+- **后果**：包体从 212MB 降到 118MB;**禁止任何会话把 OpenCV 加回来**（CLAHE 等需求用 numpy 手写）。
+
+## D03 导出采用模板占位符（2026-07-22）
+
+- **背景**：用户要求"自定义格式导出"。
+- **决策**:TXT/CSV 两种载体，行内容按模板渲染；占位符 `{index} {filename} {type} {content} {date} {time} {count}`；未知占位符原样保留 + `warnings.warn`，不崩溃。
+- **弃项**:固定格式下拉（不够灵活）；预设+模板双模式（用户单选模板）。
+- **后果**:`exporter.py` 用 `str.format_map` + 安全缺省 dict;CSV `utf-8-sig` 兼容 Excel,`newline=""`;TXT `newline=None` 跟随平台。
+
+## D04 状态持久化用 QSettings（2026-07-22）
+
+- **决策**：窗口几何、模板、格式、分隔符、最近导出目录、最近会话图片列表全部走 QSettings（组织/应用名 `BarcodeReader`)。`MainWindow(settings=None)` 可注入临时 ini,**测试不得碰真实用户配置**。
+- **后果**：键清单见 README；会话恢复采用"启动直接恢复 + 过滤已删除文件"的最简实现。
+
+## D05 日志手写 paths.py 选址，不引 platformdirs（2026-07-22）
+
+- **决策**：日志目录 macOS `~/Library/Logs/BarcodeReader`、Windows `%LOCALAPPDATA%\BarcodeReader\logs`、Linux `$XDG_STATE_HOME` 默认 `~/.local/state`;RotatingFileHandler 1MB×3 + 控制台。
+- **弃项**:platformdirs（三平台各一行就能写清，不值得新增依赖和打包体积）。
+- **后果**：数据目录（SQLite 历史库）同风格：`paths.py data_dir()`。
+
+## D06 剪贴板临时图不落持久化、不可重命名（2026-07-22）
+
+- **背景**：粘贴的图落盘为临时 PNG。
+- **决策**:① 不写入 `session/recent_images`（一次性产物，重启后临时目录已删）;② 重命名功能一律跳过临时目录（重命名会让路径逃出临时目录，破坏"退出 rmtree 清理"语义）。
+- **后果**:`_save_settings()` 用 `Path.is_relative_to(self._clipboard_dir)` 过滤；renamer `skip_dir` 参数。
+
+## D07 子控件必须关闭 acceptDrops（2026-07-22）
+
+- **背景**：用户反馈拖拽失效，根因是 QListWidget/QTableWidget 默认 acceptDrops=True，拦截了 drop 事件不冒泡到主窗口。
+- **决策**：拖放统一由 MainWindow 级别处理；**任何新加的列表/表格/预览控件必须 `setAcceptDrops(False)`（含 viewport())**。
+- **后果**：写入 AGENTS.md「UI 约定」；冒烟测试走真实 QDragEnterEvent/QDropEvent 链路。
+
+## D08 对话框中文化：Qt 翻译 + DontUseNativeDialog（2026-07-22）
+
+- **背景**：原生文件对话框跟随系统语言（英文 macOS 下显示英文）。
+- **决策**：启动加载 `qtbase_zh_CN.qm` + `qt_zh_CN.qm`;QFileDialog 统一 `DontUseNativeDialog`，保证三平台一致中文。
+- **后果**:QMessageBox 标准按钮由 qtbase 翻译自动覆盖；translator 必须挂 app 持有引用防 GC。
+
+## D09 识别管线 v2：分层递进（2026-07-22）
+
+- **背景**：用户要求智能调参提高识别率；讨论确定识别功能优先于一切。
+- **决策**:PRE(>20MP 降采样至约 8MP)→ L0 默认 → L1 增强（GlobalHistogram→CLAHE→±15°细旋转→1.5x/2x→gamma，命中即停）→ L2 组合（binarizer×增强×旋转，上限 12 组）;**L1/L2 在 ≤2MP 工作图上跑**（实测 8MP 上 L2 需 40s+ 不可接受，2MP worst-case ~5s）。
+- **弃项**:OpenCV CLAHE（见 D02）；无上限的笛卡尔积（成本爆炸）。
+- **后果**:DecodeResult 带 `strategy` 字段；worst-case ~5s/张由 worker 线程承担。
+
+## D10 智能调参分阶段，深度学习不先行（2026-07-22）
+
+- **背景**：用户希望"深度学习动态调参"。
+- **决策**：分三阶段——①分层管线+数据管道（已完成）;②轻量在线学习（ε-greedy bandit/特征分桶，纯 numpy，边用边学）;③数据积累后离线训练小模型导 ONNX(onnxruntime 推理）。
+- **弃项**：直接上 PyTorch（无训练数据、依赖 ~2GB 毁掉 118MB 包体、"图像特征→参数选择"是小样本在线决策问题，不匹配 DL)。
+- **后果**:`strategy_log` 表 schema 按可训练标准设计（ts/sha256/features JSON/attempts JSON/final_strategy/final_hit_count)，从第一天积累数据。
+
+## D11 工作流：讨论→设计→实施（用户硬约束）（2026-07-22）
+
+- **背景**：用户明确要求业务功能不得"讲完直接改"。
+- **决策**：业务功能先讨论（做什么/边界/不做什么）→ 设计（选型/结构/影响面）→ 用户确认 → 实施；调试必须先复现再分析，禁止凭假设改代码。
+- **例外**：明确 bug 修复、用户给出具体实施指令、用户明确说"直接做"。
+- **后果**：已写入 `~/.agents/AGENTS.md`（用户级，所有项目生效）。
+
+## D12 从 Claude Code 定制迁移而非全量复制（2026-07-22）
+
+- **决策**：项目级 `AGENTS.md` 全新撰写（沉淀本项目真实约定）；用户级 `~/.agents/AGENTS.md` 只蒸馏 `~/.claude/CLAUDE.md` 工具无关的核心思想（小步快跑/现实校准/调试协议/变更控制/验证体系/工程底线/讨论式设计流程）。
+- **弃项**:llmwiki 三层知识管理（Claude 专属 MCP,Kimi 无对应物，照搬产生死引用）;`.claude/skills` 薄模板（20 行级别，复制价值低）。
+- **后果**:`.claude/skills` 精选改写仍挂起，待用户推进。
+
+## D13 高亮框坐标反变换：记录变换链 + 命中后反算（2026-07-22）
+
+- **背景**:D09 管线在 PRE 降采样/L1 放大/旋转后的候选图上命中时，`position` 是候选图坐标系，预览高亮框偏移。
+- **决策**：管线每层携带正向变换链（`("scale", 倍率)` / `("rot", 角度, 旧尺寸, 新尺寸)`），命中后 `_invert_point` 逆序反算回原图坐标系；旋转以图中心（size/2）为原点。
+- **弃项**：只在原始图上重扫定位（多一次解码且多码图对不上号）；裁剪复核做测试断言（疑难图裁出区域本身 degraded,L0 照样识不出，断言必然假失败——改用「反变换结果正变换回候选图与 zxing 原始 position 比对」）。
+- **后果**：旋转中心约定经标记块实证（任意角 <0.2px);90° 时 PIL 中心取整约定差 1px，管线只用 ±15° 不受影响；zxing 复核 hard_rot15 0.52px / hard_big 0.23px。
+
+## D14 疑似码方案：只标记、不入正式记录（2026-07-22）
+
+- **背景**：管线带 `return_errors=True` 后能捞回校验失败的码（ChecksumError 等）。
+- **决策**：疑似码作为 `DecodeResult(suspect=True)` 返回——表格码制列带 `?` + 浅黄底；**不写入历史库 `records` 表**（保持"确认结果"语义），过程数据由 `strategy_log` 承载（`final_hit_count` 只计有效码）；空文本的错误结果（MicroQR 噪声等）直接丢弃；默认启用，可关。
+- **弃项**：写入 records 但加标记列（历史搜索会混入不可靠数据，schema 还要迁移）；全部层的疑似都收集（重复刷屏，只取命中层、未命中时取 L0 层）。
+- **后果**：命中判定/hit-stop 只认有效码；导出/复制照常包含疑似行（用户可见即可甄别）。
+
+## D15 识别控制项快照到 worker，而非解码时读全局（2026-07-22）
+
+- **背景**：档位/码制/疑似码三项设置需要在后台线程解码时生效。
+- **决策**:`add_paths`/`rescan_item` 把当前设置快照进 `_DecodeWorker`(tier/format_names/include_suspect),worker 内 `formats_flag()` 转 `barcode_formats_from_str`;QSettings 持久化三键（`decode/tier|formats|suspect`）。
+- **弃项**:worker 解码时读主窗口控件（跨线程读 GUI 状态，时序不可靠）。
+- **后果**：同一批图共享同一快照；改设置不影响已在跑的批次（符合直觉）。
+
+## D18 外模板字面替换、过滤码制存短名（2026-07-22，R1 实施期）
+
+- **背景**：实施 D16 两段式时发现两个设计偏差。
+- **决策**:① 外模板**不走 format 解析**，只做 `{items}` 字面替换——Python format 无法表达裸 `{` 字面量，`{'{items}'}` 这类外模板（元组/SQL IN 的主用例）会直接 `ValueError`；字面替换后其余字符（引号/花括号）原样输出，行为更直觉;② `ExportFilter.types` 存 zxing **短名**（`QRCode`，与 `DecodeResult.format` 一致），对话框显示名（`QR Code`）经 `FORMAT_WHITELIST` 映射——首版把显示名存进过滤条件导致选中即全过滤;③ 过滤正则的 `re.error` 包装成 `ValueError` 再抛（3.14 的 `re.PatternError` 不是 ValueError 子类），GUI 统一按 ValueError 弹警告。
+- **弃项**：外模板用 `{{`/`}}` 转义约定（要求用户理解 Python format 转义，不直觉）。
+- **后果**：验收用例 `{'abc','def'}` 实测通过；README 模板语法表已按字面语义重写。
+
+## D19 L3 区域层 + 签名共识误识防护（2026-07-22，R2 首张真实难图）
+- **背景**：首张真实难图（药品追溯码 757×762,5 个 Code128，倾斜/模糊/竖向重影）极限档 0/5。根因三要素:① 码小而糊，需 3-4x 放大 + UnsharpMask 锐化;② 每个标签倾斜角各异且非整数步进可命中（需 ±10° 步进 1° 细扫）;③ 激进变换会产出**校验能过的假码**（实测 `91046420001231641109`、`560148090231480364` 等）。
+- **决策**:① L1 加 UnsharpMask 锐化项、L2 binarizer 纳入 FixedThreshold;② 新增 L3 区域层（仅极限档）：8 横带 40% 重叠（一维码横向条带不被切断）粗切，tile 内 3x/4x → UnsharpMask(3,150,2) → ±10° 步进 1° × ft/gh，同带集齐 2 个签名即出带；横带全落空才跑 3×3 网格（步进 2°）兜底矩阵码；组合硬上限 750;③ **签名共识误识防护**:L2/L3 不命中即停，全部命中按（内容+原图位置 80px 内）聚类，≥2 个**不同参数签名**（放大/锐化/角度/binarizer,tile 差异不算）才算有效，单签名降级为 suspect;④ tile 命中 position 经变换链新增 `("offset", x, y)` 算子反变换回原图坐标系。
+- **弃项**:3×3 网格做一维码主切法（竖向切断条带，实测只救回 1/5)；命中即停（无法构建共识）；内容级共识（重复标签同内容会被错误合并，须带位置聚类）。
+- **后果**：真实图 5/5 有效命中（共识 2-4 签名），0 误识；**期望码校正**：任务书 manifest 的 `8631642000126482464` 少一位，正确为 `86316420001266482464`（标识码 8631642+13 位序列号，20 位，见 tests/images/real_manifest.json);miss 场景 worst-case 实测 19.6s（超出原 ~15s 估计，如实登记）。
+
+## D16 导出采用两段式模板 + R1 范围（2026-07-22）
+
+- **背景**：用户要求码内容支持聚合格式导出（例：`{'abc','def'}`）。
+- **决策**：两段式模板——行模板（单码渲染）+ 连接符 + 外模板（含 `{items}` 占位符）+ 分组维度（不分组/按图片/全局）。外模板填 `{items}` 即退化为现有行为，向后兼容。元组、JSON 数组、SQL IN 等格式均为同一机制的模板实例。
+- **弃项**：固定聚合格式下拉（不够自由，用户明确要"自定义"）。
+- **R1 范围（用户确认）**：两段式模板 + XLSX/JSON 格式 + 导出过滤（类型/长度/前缀/正则）+ 导出到剪贴板，一次做完。
+- **后果**:`exporter.py` 需重构渲染管线（record → 行渲染 → 分组 → 外模板）；模板 UI 加连接符/外模板/分组控件，QSettings 键相应扩展。
+
+## D17 路线图与阶段门槛（2026-07-22）
+
+- **决策**:R1 导出增强（设计确认即开工）→ R2 真实疑难图验证（等供图）→ 阶段 2 在线学习（**硬门槛：strategy_log ≥200 条真实图记录且 L1/L2 救回样本 ≥30 条**）→ 阶段 3 DL（阶段 2 上线且 ≥2000 条后评估）。
+- **弃项**：立即做在线学习（无真实数据，学出来是噪声）；无门槛凭感觉启动（用户要求"规划好，等积累足够再进行下一步"）。
+- **后果**：门槛检查方式：查 strategy_log 行数及 final_strategy 分布；全文见 PROJECT-STATE.md 路线图表。
+
+## D20 DecodeProfile 参数化 + 双池（档案池/模板池）（2026-07-22）
+- **背景**：阶段 2 在线学习需要管线参数可调（地基）；用户同时要求导出配置可复用。
+- **决策**:① 管线全部硬编码抽为 `DecodeProfile`（嵌套 dataclass,`pre/l1/l2/l3/consensus` 五组，可 JSON 序列化，`from_dict` 缺字段容忍）；模块常量仍是单一数据源，默认 profile=常量，**默认行为零变化**（72 个既有测试含真实图 5/5 不动断言全绿为证）;strategy 描述串格式不变（`BINARIZER_DESC` 映射保 strategy_log 可对回）;② 档案池 `profiles.json`（内置「默认」不可删不可改、编辑必另存；档位与档案**正交**——档位管层数、档案管参数）;③ 导出模板池 `templates.json`（整套导出配置命名存取），内置预设：默认逐行/元组聚合/JSON 数组/SQL IN（仅文件不存在时写入，可删）。
+- **弃项**:profile 用自由 dict（无 schema 校验和默认值容忍）；模板池存 QSettings（多份命名配置塞 ini 不如 JSON 清爽，且与 profiles.json 同构）。
+- **后果**:`MainWindow` 构造新增 `profile_store/template_store` 注入点，测试一律注入 tmp store（AGENTS 纪律升级：不碰真实数据目录）；阶段 2 地基就绪。
+
+## D21 对话框小屏幕适配：QScrollArea + 高度上限（2026-07-22）
+
+- **背景**：「参数…」对话框五组约 20 个字段实测内容高超 1800px，超出屏幕后 L3 后半/共识组/确认按钮不可达，无滚动。
+- **决策**：新增 `ui/scroll_helper.py`——`wrap_scrollable()`（内容区进只垂直滚动的 QScrollArea,widgetResizable，按钮栏固定滚动区外始终可达）+ `cap_dialog_height()`（最大高度 = 光标所在屏 `availableGeometry().height()` × 0.8，多屏取光标屏）。ProfileDialog、ExportSettingsDialog 已接入；history/rename/formats 对话框排查无此问题（表格自滚动或内容少）。
+- **弃项**：压缩字段/两列布局（牺牲全开放可读性）；只设最大高度不加滚动（内容仍被裁）。
+- **后果**:AGENTS.md 新增 UI 约定——内容多的对话框必须走 scroll_helper；回归测试 `tests/test_dialogs.py`。
+
+## D22 移除图片后预览刷新策略：按当前选中项重建而非清空（2026-07-22）
+- **背景**：用户报告——2 图移除 1 图后仅剩的图无法预览（点击无反应），再加图才恢复。
+- **根因（复现确认）**:`_remove_item` 无条件 `preview.clear_image()`——既误清了未选中项的预览；且剩余单图 `currentRow` 不变、`currentRowChanged` 不再触发，没有任何路径重建预览。
+- **决策**：移除后统一调 `_refresh_current_preview()`（按当前选中项重建预览，无选中才清空）；另接 `itemClicked` 强制刷新，兜底"点击已选中项"（行不变不发信号）的脱节情形。
+- **弃项**：仅在移除的是选中项时才清（仍解决不了剩余单图无信号可触发）；给点击特判重发 currentRowChanged（不如 itemClicked 直接）。
+- **后果**：回归测试 `tests/test_preview.py` 5 条（复现 2 + 边界 3：移除选中项/清空到 0/去重视图一致）。
+
+## D23 预览标记体系：Frame 共享模型 + QGraphicsView 显示层旋转（2026-07-22）
+
+- **背景**:F1 独立预览窗口、F2 框编号、F3 点击高亮三项需要主预览与独立窗口一致的标记语义。
+- **决策**:① 标记帧统一为 `ui/preview_window.py` 的 `Frame`（四角点/全局序号/疑似/内容）,`build_frames/frame_color/frame_label/frame_state` 主预览与 F1 共用；序号 = 结果表格「序号」列（跨图累加，去重视图下仍用全局序号）;② **F1 旋转用 `QGraphicsView.rotate` 显示层 90° 步进**——帧（多边形+文本）作为 scene item 随视图一起转，框与码对应关系天然保持，无需重算坐标；旋转只影响显示不改文件;③ F3 高亮：点击行记录内容，对应帧橙（255,140,0）加粗、其余帧 alpha 60 变淡；换图/点空白恢复。
+- **弃项**：旋转时只显示原图+提示（用户体验差）；重算旋转后框坐标（90° 中心取整约定有 1px 坑，且文本朝向还得单独处理）；去重视图用去重序号标注（与跨图累加语义不一致，用户指定全局序号）。
+- **后果**：结果表格隐藏默认行号表头；`tests/test_f_features.py` 8 条（表头隐藏/全局序号/黄框/橙色像素/去重跳转/F1 缩放旋转标记两态/高亮同步）。
+
+---
+
+## D24 打包翻译：只加载 qtbase，不加载 qt_zh_CN 元目录（2026-07-23）
+
+- **背景**：打包后启动报「qt_zh_CN 翻译加载失败」警告。
+- **根因（逐层实证）**:`qt_zh_CN.qm` 是 99 字节元目录，自身零翻译，仅引用 `qtbase_zh_CN` + `qtmultimedia_zh_CN`;venv 里有 qtmultimedia 故开发环境加载成功，包内没有则失败。对话框/按钮翻译的真正载体 `qtbase_zh_CN` 在包内**一直加载正常**——该警告从首版打包起就是无害的 cosmetic 警告。
+- **决策**:`main.py` 只加载 `qtbase_zh_CN`;`build.py` 仅显式打入 `qtbase_zh_CN.qm` 兜底（冻结环境下 QLibraryInfo 不一定指得到翻译目录，main.py 对冻结环境追加 Resources 候选路径）。
+- **弃项**:qt_zh_CN 一并打入（需要连 qtmultimedia 全部翻译一起进包，为不用的模块白白加体积）;build.py 收集全部翻译（钩子本就收集了大部分，过度处理）。
+- **教训（记入防复发）**：见到警告先验证实际影响再动手——本次一度误判"中文界面失效"而过度修复。
+- **后果**：打包验证标准增加一条「启动日志无翻译警告」。
+
+---
+
+## 已知限制登记（随解决随更新）
+
+- ~~L1/L2 经放大/旋转命中时，识别框坐标为变换后坐标系~~（D13 已修复，zxing 复核 <2px；90° 中心取整约定差 1px 与管线无关）
+- 特征提取的主旋转角是梯度直方图启发式，弱纹理图无意义
+- 极端难图 worst-case：命中场景约 12s/张（L3 出带即跳），miss 场景全扫描实测 19.6s/张（D19 如实登记）
+- 合成疑难图命中对噪声种子敏感，已锁种子保证可复现；真实疑难图验证集待用户提供
+- Windows 剪贴板 DIB 归一化、Windows/Linux 打包未实机验证

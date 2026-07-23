@@ -1,0 +1,64 @@
+{
+  "qr_hello.png": [
+    {
+      "format": "QRCode",
+      "content": "https://example.com/qr-hello"
+    }
+  ],
+  "qr_chinese.png": [
+    {
+      "format": "QRCode",
+      "content": "批量条码识别测试"
+    }
+  ],
+  "code128_a.png": [
+    {
+      "format": "Code128",
+      "content": "CODE128-ABC-12345"
+    }
+  ],
+  "code128_b.png": [
+    {
+      "format": "Code128",
+      "content": "SN-20260722-0001"
+    }
+  ],
+  "datamatrix_a.png": [
+    {
+      "format": "DataMatrix",
+      "content": "DM-DATA-998877"
+    }
+  ],
+  "ean13_a.png": [
+    {
+      "format": "EAN13",
+      "content": "6901234567892"
+    }
+  ],
+  "multi_3codes.png": [
+    {
+      "format": "QRCode",
+      "content": "https://example.com/qr-hello"
+    },
+    {
+      "format": "Code128",
+      "content": "CODE128-ABC-12345"
+    },
+    {
+      "format": "DataMatrix",
+      "content": "DM-DATA-998877"
+    }
+  ],
+  "qr_rotated180.png": [
+    {
+      "format": "QRCode",
+      "content": "https://example.com/qr-hello"
+    }
+  ],
+  "qr_lowres.png": [
+    {
+      "format": "QRCode",
+      "content": "LOWRES-QR-42"
+    }
+  ]
+}
