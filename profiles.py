@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 BUILTIN_NAME = "默认"
 
 
+def _backup_corrupt(path: Path) -> Path | None:
+    """把损坏的配置文件备份为 <原名>.corrupt-<时间戳>.bak（复制不移动，
+    原文件留证；同秒冲突自动加序号防覆盖）。失败返回 None。"""
+    import shutil
+    from datetime import datetime
+    try:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = path.with_name(f"{path.name}.corrupt-{stamp}.bak")
+        n = 2
+        while backup.exists():
+            backup = path.with_name(f"{path.name}.corrupt-{stamp}-{n}.bak")
+            n += 1
+        shutil.copy2(path, backup)
+        logger.warning("损坏文件已备份: %s -> %s", path, backup)
+        return backup
+    except OSError:
+        logger.exception("损坏文件备份失败: %s", path)
+        return None
+
+
 class ProfileStore:
     """档案池。db_path 可注入（测试用 tmp 路径）。"""
 
@@ -26,6 +46,7 @@ class ProfileStore:
 
     def _load(self):
         self._profiles = {BUILTIN_NAME: DecodeProfile()}
+        self.corrupt_backup: Path | None = None  # 损坏备份路径（MainWindow 提示用）
         if self.path.is_file():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -33,14 +54,21 @@ class ProfileStore:
                     if name != BUILTIN_NAME:
                         self._profiles[name] = DecodeProfile.from_dict(d)
             except Exception:  # noqa: BLE001
-                logger.exception("档案池读取失败: %s", self.path)
+                logger.exception("档案池读取失败（文件损坏，已备份并回落默认）: %s",
+                                 self.path)
+                self.corrupt_backup = _backup_corrupt(self.path)
+                self._profiles = {BUILTIN_NAME: DecodeProfile()}
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {n: p.to_dict() for n, p in self._profiles.items()
-                   if n != BUILTIN_NAME}
-        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                             encoding="utf-8")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {n: p.to_dict() for n, p in self._profiles.items()
+                       if n != BUILTIN_NAME}
+            self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+        except OSError as exc:
+            logger.exception("档案池写入失败: %s", self.path)
+            raise ValueError(f"档案池写入失败（{exc}）") from exc
 
     def names(self) -> list[str]:
         return [BUILTIN_NAME] + sorted(n for n in self._profiles if n != BUILTIN_NAME)

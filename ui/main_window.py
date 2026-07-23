@@ -433,6 +433,26 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("拖入图片或点击“添加图片”开始")
 
         self._restore_settings()
+        self._notify_corrupt_stores()
+
+    def _notify_corrupt_stores(self):
+        """配置文件损坏提示（一次性弹窗 + 状态栏 + 日志，D25）：
+        用户自定义内容已回落默认，必须让用户知晓并去 .bak 抢救。"""
+        reports = []
+        for label, store in (("识别档案池 profiles.json", self._profiles),
+                             ("导出模板池 templates.json", self._templates)):
+            backup = getattr(store, "corrupt_backup", None)
+            if backup:
+                reports.append(f"{label} → 已备份到 {backup}")
+        if not reports:
+            return
+        detail = "\n".join(reports)
+        logger.warning("配置文件损坏，已备份并回落默认:\n%s", detail)
+        self.statusBar().showMessage("配置文件损坏：已备份原文件并回落默认", 8000)
+        QMessageBox.warning(
+            self, "配置文件损坏",
+            "检测到配置文件损坏，自定义内容已回落默认（程序可正常使用）。\n"
+            "原文件已备份，可手动抢救：\n" + detail)
 
     # ---------- 状态持久化 ----------
 
@@ -544,6 +564,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "参数档案", str(exc))
             return
         self._reload_profile_combo(new_name)
+        self.statusBar().showMessage(f"档案已保存: {new_name}", 5000)
 
     def delete_profile(self):
         name = self.profile_combo.currentText()
@@ -553,6 +574,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "参数档案", str(exc))
             return
         self._reload_profile_combo(self._profiles.names()[0])
+        self.statusBar().showMessage(f"档案已删除: {name}", 5000)
 
     def _reload_profile_combo(self, select: str):
         self.profile_combo.blockSignals(True)
@@ -615,6 +637,7 @@ class MainWindow(QMainWindow):
             return
         self._templates.delete(name)
         self._reload_tpl_pool_combo("（当前编辑）")
+        self.statusBar().showMessage(f"模板已删除: {name}", 5000)
 
     def _reload_tpl_pool_combo(self, select: str):
         self.tpl_pool_combo.blockSignals(True)
@@ -718,7 +741,9 @@ class MainWindow(QMainWindow):
     def open_log_dir(self):
         directory = app_paths.log_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+            logger.warning("打开日志目录失败: %s", directory)
+            self.statusBar().showMessage(f"无法打开日志目录: {directory}", 8000)
 
     # ---------- 拖入（MainWindow 级别统一处理，子控件已关闭 acceptDrops） ----------
 
@@ -798,9 +823,19 @@ class MainWindow(QMainWindow):
                 break
         if self._pending <= 0:
             self.progress.setVisible(False)
-            total = sum(len(v) for v in self.results.values())
-            self.statusBar().showMessage(
-                f"共 {len(self.results)} 张图，识别到 {total} 个码")
+            failed = sorted(self.errors)
+            if failed:
+                # 批量失败汇总（D25 三档：状态栏 8s + 日志含失败清单，不弹窗骚扰）
+                success = len(self.results) - len(failed)
+                self.statusBar().showMessage(
+                    f"批量完成：成功 {success} 张，失败 {len(failed)} 张", 8000)
+                logger.warning("批量解码完成：成功 %d 张，失败 %d 张: %s",
+                               success, len(failed),
+                               "; ".join(Path(p).name for p in failed))
+            else:
+                total = sum(len(v) for v in self.results.values())
+                self.statusBar().showMessage(
+                    f"共 {len(self.results)} 张图，识别到 {total} 个码")
         self._rebuild_table()
         self._refresh_template_preview()
         current = self.file_list.currentItem()
@@ -1036,16 +1071,21 @@ class MainWindow(QMainWindow):
     def copy_selected(self):
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         if not rows:
+            self.statusBar().showMessage("未选中任何行", 5000)
             return
         text = "\n".join(self.table.item(r, 3).text() for r in rows)
         QApplication.clipboard().setText(text)
-        self.statusBar().showMessage(f"已复制 {len(rows)} 条")
+        self.statusBar().showMessage(f"已复制 {len(rows)} 条 / {len(text)} 字符", 8000)
 
     def copy_all(self):
         records = self._filtered_records()
-        if records:
-            QApplication.clipboard().setText("\n".join(r.content for r in records))
-            self.statusBar().showMessage(f"已复制全部 {len(records)} 条（含过滤）")
+        if not records:
+            self.statusBar().showMessage("没有可复制的记录", 5000)
+            return
+        text = "\n".join(r.content for r in records)
+        QApplication.clipboard().setText(text)
+        self.statusBar().showMessage(
+            f"已复制全部 {len(records)} 条 / {len(text)} 字符（含过滤）", 8000)
 
     # ---------- 模板与导出 ----------
 
@@ -1092,7 +1132,9 @@ class MainWindow(QMainWindow):
         records = self._export_records()
         try:
             return apply_filter(records, self._filter)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning("过滤正则无效，按不过滤处理: %s", exc)
+            self.statusBar().showMessage(f"过滤正则无效，已按不过滤处理: {exc}", 8000)
             return records
 
     def _filter_or_warn(self, records: list[ExportRecord]) -> list[ExportRecord] | None:
@@ -1109,13 +1151,14 @@ class MainWindow(QMainWindow):
         if records is None:
             return
         if not records:
-            self.statusBar().showMessage("没有可复制的识别结果", 5000)
+            QMessageBox.warning(self, "复制到剪贴板", "没有可导出的记录")
             return
         text = render_two_stage(records, self.template_edit.text() or DEFAULT_TEMPLATE,
                                 self._joiner, self._outer, self._group_by)
         QApplication.clipboard().setText(text)
-        logger.info("按模板复制 %d 条到剪贴板", len(records))
-        self.statusBar().showMessage(f"已按模板复制 {len(records)} 条到剪贴板", 5000)
+        logger.info("按模板复制 %d 条 / %d 字符到剪贴板", len(records), len(text))
+        self.statusBar().showMessage(
+            f"已按模板复制 {len(records)} 条 / {len(text)} 字符到剪贴板", 8000)
 
     def export_results(self):
         records = self._filter_or_warn(self._export_records())

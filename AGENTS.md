@@ -14,7 +14,7 @@
 ```bash
 source .venv/bin/activate        # 所有依赖只装进 .venv，禁止污染系统 Python
 python main.py                   # 运行
-pytest tests/ -q                 # 测试（当前 98 个，含 1 个 ~12s 的 slow 真实图验收）
+pytest tests/ -q                 # 测试（当前 114 个，含 1 个 ~12s 的 slow 真实图验收）
 QT_QPA_PLATFORM=offscreen python tests/smoke_gui.py   # 无头 GUI 冒烟
 python build.py                  # PyInstaller 打包（不能交叉编译，须在目标平台执行）
 ```
@@ -39,6 +39,7 @@ python build.py                  # PyInstaller 打包（不能交叉编译，须
 - `PreviewLabel.show_image` 加载失败必须清空旧 pixmap 并显示提示——残留上一张图会被用户当成"预览失效/串图"（回归测试 `tests/test_preview.py`）
 - **对话框高度必须考虑小屏幕**：内容多的自定义对话框一律用 `ui/scroll_helper.py` 的 `wrap_scrollable()`（内容进 QScrollArea、按钮栏固定在外）+ `cap_dialog_height()`（上限 = 光标所在屏可用高度 × 0.8）；新增对话框对照 `tests/test_dialogs.py` 补断言
 - **标记帧统一走 `ui/preview_window.py` 的 Frame 模型**：主预览（PreviewLabel）与 F1 窗口共用 `build_frames/frame_color/frame_label/frame_state`——绿框有效、黄框疑似（序号带 `?`）、橙框点击高亮、其余变淡（alpha 60）；框序号 = 结果表格「序号」列（跨图累加，`MainWindow._frames_for()`）；结果表格垂直行号表头一律隐藏（与「序号」列重复）
+- **用户操作反馈三档（D25）**：成功 = 状态栏带量化信息（条数/字符数/名称，8s）；空态/可预期失败 = 状态栏提示或 `QMessageBox.warning`（阻断性操作用弹窗）；异常失败 = `logger.exception` + 弹窗（导出）或列表项状态（解码）。禁止静默吞异常（catch 必须记日志或给用户反馈），新增按钮动作对照 `tests/test_feedback.py` 补断言
 - **调试脚本不得对 `tests/images/` 里的原始测试图执行重命名等破坏性操作**——重命名只对 tmp 副本进行（曾有调试脚本把 qr_hello.png 改名导致测试图缺失）
 
 ## 结构

@@ -75,11 +75,25 @@ class ExportSettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         # 小屏幕适配（D21）：内容进滚动区，按钮栏固定在外始终可达
         self._scroll = wrap_scrollable(self, content, buttons)
         cap_dialog_height(self)
+
+    def _on_accept(self):
+        """确定前校验长度字段：非数字输入弹警告并留在对话框。"""
+        from PySide6.QtWidgets import QMessageBox
+        for edit, label in ((self.min_len_edit, "长度最小值"),
+                            (self.max_len_edit, "长度最大值")):
+            text = edit.text().strip()
+            if text:
+                try:
+                    int(text)
+                except ValueError:
+                    QMessageBox.warning(self, "导出过滤", f"{label}必须是整数: {text!r}")
+                    return
+        self.accept()
 
     # ---- 结果读取 ----
 

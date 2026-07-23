@@ -11,6 +11,7 @@ from pathlib import Path
 
 from exporter import (DEFAULT_TEMPLATE, ExportFilter)
 from paths import data_dir
+from profiles import _backup_corrupt
 
 logger = logging.getLogger(__name__)
 
@@ -64,21 +65,31 @@ class TemplateStore:
         self._load()
 
     def _load(self):
+        self.corrupt_backup: Path | None = None  # 损坏备份路径（MainWindow 提示用）
         if self.path.is_file():
             try:
                 self._templates = json.loads(self.path.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001
-                logger.exception("模板池读取失败: %s", self.path)
+                logger.exception("模板池读取失败（文件损坏，已备份并回落内置预设）: %s",
+                                 self.path)
+                self.corrupt_backup = _backup_corrupt(self.path)
                 self._templates = {}
         if not self._templates:
             self._templates = {n: dict(t) for n, t in BUILTIN_TEMPLATES.items()}
-            self._save()
+            try:
+                self._save()
+            except ValueError:
+                pass  # 写入失败已在 _save 内记日志，内置预设可内存态继续使用
 
     def _save(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(self._templates, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps(self._templates, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as exc:
+            logger.exception("模板池写入失败: %s", self.path)
+            raise ValueError(f"模板池写入失败（{exc}）") from exc
 
     def names(self) -> list[str]:
         builtin = [n for n in BUILTIN_TEMPLATES if n in self._templates]
