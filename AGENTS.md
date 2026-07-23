@@ -14,7 +14,7 @@
 ```bash
 source .venv/bin/activate        # 所有依赖只装进 .venv，禁止污染系统 Python
 python main.py                   # 运行
-pytest tests/ -q                 # 测试（当前 120 个，含 1 个 ~12s 的 slow 真实图验收）
+pytest tests/ -q                 # 测试（当前 121 个，含 1 个 ~12s 的 slow 真实图验收）
 QT_QPA_PLATFORM=offscreen python tests/smoke_gui.py   # 无头 GUI 冒烟
 python build.py                  # PyInstaller 打包（不能交叉编译，须在目标平台执行）
 ```
@@ -45,6 +45,9 @@ python build.py                  # PyInstaller 打包（不能交叉编译，须
 ## 结构
 
 ```
+README.md                  # 项目门面：定位/亮点/快速开始/文档地图（细节在 docs/）
+docs/USER-GUIDE.md         # 使用手册：功能详情、模板与导出、管线、状态与日志
+docs/FAQ.md                # 常见问题：启动失败/拦截/打包/Linux 依赖/界面
 main.py / decoder.py / exporter.py / history.py / renamer.py / paths.py / logging_setup.py
 profiles.py                # DecodeProfile 档案池（profiles.json）
 templates.py               # 导出模板池（templates.json + 内置预设）

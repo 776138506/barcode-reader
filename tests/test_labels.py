@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QGraphicsRectItem, QGraphicsSimpleTe
 from profiles import ProfileStore  # noqa: E402
 from templates import TemplateStore  # noqa: E402
 from ui import main_window as mw  # noqa: E402
-from ui.preview_window import (Frame, build_frames, frame_label,  # noqa: E402
+from ui.preview_window import (Frame, PreviewWindow, build_frames, frame_label,  # noqa: E402
                                label_placement, label_style)
 
 IMG_DIR = Path(__file__).resolve().parent / "images"
@@ -157,3 +157,42 @@ def test_f1_label_items_consistent(qapp, tmp_path):
     assert rects_h[0].brush().color().alpha() == 255
     pw.close()
     win.close()
+
+
+def test_f1_text_brush_matches_label_style(qapp):
+    """F1 标签文字样式必须走 label_style 同一来源（四态）。"""
+    pw = PreviewWindow()
+    frame = Frame(points=[(20, 30), (120, 30), (120, 90), (20, 90)],
+                  seq=1, suspect=False, content="abc")
+    pw.set_image("t", QPixmap(200, 200), [frame])
+    texts = [i for i in pw._scene.items()
+             if isinstance(i, QGraphicsSimpleTextItem)]
+    assert len(texts) == 1, "文本 item 未加入 scene"
+    _bg, text_color, bold = label_style(frame, "normal")
+    assert texts[0].brush().color() == text_color
+    assert texts[0].font().bold() == bold
+
+    # 高亮态：白字加粗
+    pw.set_highlight("abc")
+    texts_h = [i for i in pw._scene.items()
+               if isinstance(i, QGraphicsSimpleTextItem)]
+    _bg_h, text_h_color, bold_h = label_style(frame, "highlight")
+    assert texts_h[0].brush().color() == text_h_color
+    assert texts_h[0].font().bold() == bold_h
+
+    # dim 态：文字变淡
+    pw.set_highlight("别的内容")
+    texts_d = [i for i in pw._scene.items()
+               if isinstance(i, QGraphicsSimpleTextItem)]
+    _bg_d, text_d_color, _b = label_style(frame, "dim")
+    assert texts_d[0].brush().color().alpha() == text_d_color.alpha() == 60
+
+    # 疑似态：黄系底 + 白字
+    frame_s = Frame(points=[(20, 30), (120, 30), (120, 90), (20, 90)],
+                    seq=2, suspect=True, content="xyz")
+    pw.set_image("t", QPixmap(200, 200), [frame_s])
+    texts_s = [i for i in pw._scene.items()
+               if isinstance(i, QGraphicsSimpleTextItem)]
+    _bg_s, text_s_color, _bs = label_style(frame_s, "normal")
+    assert texts_s[0].brush().color() == text_s_color
+    pw.close()

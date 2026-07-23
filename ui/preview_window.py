@@ -209,6 +209,7 @@ class PreviewWindow(QDialog):
         label.setBrush(QBrush(text_color))
         label.setFont(font)
         label.setPos(lx + 2, ly + 1)
+        self._scene.addItem(label)  # 必须显式入 scene（addRect 只负责底色块）
         visible = self.markers_check.isChecked()
         for item in (bg_item, label):
             item.setVisible(visible)
