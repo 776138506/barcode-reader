@@ -14,7 +14,7 @@
 ```bash
 source .venv/bin/activate        # 所有依赖只装进 .venv，禁止污染系统 Python
 python main.py                   # 运行
-pytest tests/ -q                 # 测试（当前 126 个，含 1 个 ~12s 的 slow 真实图验收）
+pytest tests/ -q                 # 测试（当前 128 个，含 1 个 ~12s 的 slow 真实图验收）
 QT_QPA_PLATFORM=offscreen python tests/smoke_gui.py   # 无头 GUI 冒烟
 python build.py                  # PyInstaller 打包（不能交叉编译，须在目标平台执行）
 ```

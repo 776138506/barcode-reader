@@ -145,3 +145,97 @@ def test_vertical_code_label_is_vertical(qapp, tmp_path):
     assert (max(xs2) - min(xs2) + 1) > (max(ys2) - min(ys2) + 1), "水平码标签应保持横排"
     win.close()
     win2.close()
+
+
+# ---------- D30：标签以绿框几何为准贴边（用户实图 bug 修复） ----------
+
+def _label_corners(x, y, ang, tw, th):
+    import math as _m
+    t = _m.radians(ang)
+    e = (_m.cos(t), _m.sin(t))
+    m = (-_m.sin(t), _m.cos(t))
+    return [(x + u * e[0] + v * m[0], y + u * e[1] + v * m[1])
+            for u in (0, tw) for v in (0, th)]
+
+
+def _gap(label_corners, box):
+    bx0, bx1, by0, by1 = box
+    lx0 = min(c[0] for c in label_corners)
+    lx1 = max(c[0] for c in label_corners)
+    ly0 = min(c[1] for c in label_corners)
+    ly1 = max(c[1] for c in label_corners)
+    return max(bx0 - lx1, lx0 - bx1, 0), max(by0 - ly1, ly0 - by1, 0)
+
+
+def _orient_frame(tmp_path, img, name):
+    p = tmp_path / name
+    img.save(p)
+    results = decode_image(p)
+    assert results
+    return results[0], p
+
+
+def test_label_attaches_all_orientations(tmp_path):
+    """四种朝向：标签贴框外侧（间隙 ≤6px），起点对齐框长边端点（容差 4px）。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    from gen_test_images import make_barcode, pad
+    img = pad(make_barcode("DUMP-ORIENT-1", "Code128", 480, 150), 30)
+    variants = {
+        "rot90": img.rotate(-90, expand=True, fillcolor=255),
+        "rot270": img.rotate(-270, expand=True, fillcolor=255),
+        "rot180": img.rotate(180, expand=True, fillcolor=255),
+        "rot0": img,
+    }
+    for tag, im in variants.items():
+        r, _p = _orient_frame(tmp_path, im, f"{tag}.png")
+        f = Frame(points=r.position, seq=1, suspect=False, content=r.content)
+        ang = frame_angle(f)
+        xs = [pt[0] for pt in r.position]
+        ys = [pt[1] for pt in r.position]
+        box = (min(xs), max(xs), min(ys), max(ys))
+        if abs(ang) < 5:
+            continue  # 水平走旧路径（已有回归覆盖）
+        ax, ay, _ = rotated_label_anchor(f, ang, 90, 16, im.size[0], im.size[1])
+        corners = _label_corners(ax, ay, ang, 90, 16)
+        gx, gy = _gap(corners, box)
+        assert gx <= 6 and gy <= 6, f"{tag}: 标签脱离框体 间隙=({gx},{gy})"
+        # 起点对齐：标签沿阅读方向起点应与长边起点端同侧（容差 4px）
+        e_start = min(r.position[0], r.position[1],
+                      key=lambda p: p[0] * __import__('math').cos(__import__('math').radians(ang))
+                      + p[1] * __import__('math').sin(__import__('math').radians(ang)))
+        assert abs(ax - e_start[0]) <= 20 and abs(ay - e_start[1]) <= 20, \
+            f"{tag}: 起点未对齐 锚点=({ax:.0f},{ay:.0f}) 端点={e_start}"
+
+
+def test_three_vertical_codes_labels_attached(qapp, tmp_path):
+    """复现用户场景：三个竖排 Code128 并排，全部标签贴框不脱离。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    from gen_test_images import make_barcode, pad
+    canvas = Image.new("L", (500, 640), 255)
+    for i in range(3):
+        code = pad(make_barcode(f"VERT-CODE-{i}", "Code128", 400, 130), 15)
+        code = code.rotate(-90, expand=True, fillcolor=255)
+        canvas.paste(code, (30 + i * 160, 60))
+    path = tmp_path / "three_vertical.png"
+    canvas.save(path)
+
+    win = _make_window(tmp_path)
+    win.add_paths([str(path)])
+    win._pool.waitForDone(30000)
+    qapp.processEvents()
+    results = win.results[str(path)]
+    assert len(results) == 3, f"应识别 3 个码，实际 {len(results)}"
+    for r in results:
+        f = Frame(points=r.position, seq=1, suspect=False, content=r.content)
+        ang = frame_angle(f)
+        assert abs(ang) >= 5, "竖码应走旋转标签路径"
+        xs = [pt[0] for pt in r.position]
+        ys = [pt[1] for pt in r.position]
+        box = (min(xs), max(xs), min(ys), max(ys))
+        ax, ay, _ = rotated_label_anchor(f, ang, 90, 16,
+                                         canvas.size[0], canvas.size[1])
+        corners = _label_corners(ax, ay, ang, 90, 16)
+        gx, gy = _gap(corners, box)
+        assert gx <= 6 and gy <= 6, \
+            f"{r.content}: 标签脱离框体 间隙=({gx:.0f},{gy:.0f})"
+    win.close()

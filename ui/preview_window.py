@@ -128,30 +128,35 @@ def rotated_label_anchor(frame: Frame, angle: float,
                          text_w: float, text_h: float,
                          img_w: float, img_h: float, pad: float = 2.0,
                          ) -> tuple[float, float, float]:
-    """旋转标签锚点（用于 translate+rotate 绘制）。
+    """旋转标签锚点（用于 translate+rotate 绘制），D30 修正：以绿框几何为准。
 
-    标签沿长边起点（TL）排布，沿长边法线向框外偏移 (text_h + pad)；
-    标签矩形出图片边界时翻到另一侧。返回 (x, y, angle)：绘制时
-    translate(x, y) 后 rotate(angle)，再在 (0,0)-(text_w,text_h) 画底与字。
+    规则：长边 = TL→TR（zxing 阅读方向）；起点 S = 该边沿阅读方向投影
+    较小端；标签体贴框外侧（近边距框 pad px），沿阅读方向从 S 延伸；
+    标签四角出图片边界时翻到框另一侧。返回 (x, y, angle)：绘制时
+    translate(x, y) 后 rotate(angle)，在 (0,0)-(text_w,text_h) 画底与字，
+    局部 +x 沿阅读方向、+y 为标签体厚度方向。
     """
-    (tx, ty) = frame.points[0]  # TL = 长边起点
-    th = math.radians(angle)
-    # 长边法线（两个候选方向），取背离框中心的一侧
+    th_ = math.radians(angle)
+    e = (math.cos(th_), math.sin(th_))        # 阅读方向（局部 +x）
+    m = (-math.sin(th_), math.cos(th_))       # 标签体延伸方向（局部 +y）
+    a, b = frame.points[0], frame.points[1]   # TL, TR（长边两端）
+    # 起点 S：沿 e 投影较小端（归一化后文本从左/上开始读）
+    s = a if a[0] * e[0] + a[1] * e[1] <= b[0] * e[0] + b[1] * e[1] else b
     cx = sum(p[0] for p in frame.points) / 4
     cy = sum(p[1] for p in frame.points) / 4
-    nx, ny = math.sin(th), -math.cos(th)  # 边方向 (cos,sin) 的法线之一
-    if (cx - tx) * nx + (cy - ty) * ny > 0:
-        nx, ny = -nx, -ny
-    off = text_h + pad
-    x, y = tx + nx * off, ty + ny * off
-    # 标签四角（旋转后）边界检查，出界翻到另一侧
-    cos_t, sin_t = math.cos(th), math.sin(th)
-    corners = [(x, y),
-               (x + text_w * cos_t, y + text_w * sin_t),
-               (x + text_w * cos_t - text_h * sin_t, y + text_w * sin_t + text_h * cos_t),
-               (x - text_h * sin_t, y + text_h * cos_t)]
+    # m 指向框外 → 近边 pad 起步；指向框内 → 起点外推 (pad + text_h)
+    away = (s[0] - cx) * m[0] + (s[1] - cy) * m[1] > 0
+
+    def _origin(outward: bool) -> tuple[float, float]:
+        if outward:
+            return s[0] + m[0] * pad, s[1] + m[1] * pad
+        return s[0] - m[0] * (pad + text_h), s[1] - m[1] * (pad + text_h)
+
+    x, y = _origin(away)
+    corners = [(x + u * e[0] + v * m[0], y + u * e[1] + v * m[1])
+               for u in (0.0, text_w) for v in (0.0, text_h)]
     if any(px < 0 or px > img_w or py < 0 or py > img_h for px, py in corners):
-        x, y = tx - nx * off, ty - ny * off
+        x, y = _origin(not away)  # 出界翻到框另一侧
     return x, y, angle
 
 

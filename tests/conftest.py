@@ -20,3 +20,16 @@ def stores(tmp_path):
         "profile_store": ProfileStore(tmp_path / "profiles.json"),
         "template_store": TemplateStore(tmp_path / "templates.json"),
     }
+
+
+@pytest.fixture(autouse=True)
+def _gc_between_tests():
+    """每个测试后强制 GC。
+
+    测试创建的窗口 close() 后不删除（未设 WA_DeleteOnClose），信号 lambda
+    形成的引用环使其驻留；累积约百个隐藏窗口后 Qt offscreen 在
+    processEvents 中 Bus error/Segfault（实测复现）。逐测 GC 打断引用环。
+    """
+    import gc
+    yield
+    gc.collect()

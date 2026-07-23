@@ -1,5 +1,9 @@
 # 常见问题（FAQ）
 
+## 换电脑/迁移源码（开发者）
+
+虚拟环境（`.venv`）和打包产物都是**平台专用**的——从 Mac 复制的 `.venv` 在 Windows 上不能用，macOS 的 `.app` 也不能在 Windows 上运行。换机器后不要复制 `.venv`，只需在新机器上按 README「开发者：从源码运行」的第 0/1 步重装一次（约 2 分钟）。配置与历史数据（QSettings、数据目录的 history.db/profiles.json/templates.json）如需迁移，按 `docs/USER-GUIDE.md`「状态与日志」里的平台路径对应复制即可。
+
 ## Windows 双击/运行无法启动
 
 按顺序排查：

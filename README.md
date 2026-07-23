@@ -16,19 +16,21 @@
 PySide6（GUI）+ zxing-cpp（解码，纯 pip wheel）+ Pillow/numpy（图像处理）。
 不用 OpenCV：与 PyInstaller 冻结导入器结构性冲突，决策见 `docs/DECISIONS.md` D02。
 
-## 快速开始（从零到跑起来）
+## 快速开始
 
-> **换电脑必读**：虚拟环境（`.venv`）和打包产物都是**平台专用**的——
-> 从 Mac 复制的 `.venv` 在 Windows 上不能用，macOS 的 `.app` 也不能在 Windows 上运行。
-> 换机器后只需按下面步骤在新机器上重装一次（约 2 分钟），不用复制 `.venv`。
+### 普通用户：下载打包产物
 
-### 第 0 步：安装 Python（只需一次）
+从 GitHub Releases 下载**对应你系统**的产物（Windows `.exe` / macOS `.app` / Linux 可执行文件），双击即可运行，不需要安装 Python。macOS 首次打开未签名应用时，在「系统设置 → 隐私与安全性」中点「仍要打开」即可。
+
+### 开发者：从源码运行
+
+#### 第 0 步：安装 Python（只需一次）
 
 - **Windows**：到 [python.org/downloads](https://www.python.org/downloads/) 下载安装包，安装时**务必勾选「Add python.exe to PATH」**
 - **macOS**:`brew install python`，或同样从 python.org 安装
 - **Linux**：用系统包管理器安装 Python 3.11+（如 `sudo apt install python3 python3-venv`）
 
-### 第 1 步：创建虚拟环境并安装依赖
+#### 第 1 步：创建虚拟环境并安装依赖
 
 **Windows**（在「命令提示符」或 PowerShell 中逐行执行）：
 
@@ -48,7 +50,7 @@ python3 -m venv .venv
 
 这三行的含义：进入项目目录 → 创建独立虚拟环境 `.venv` → 把依赖装进它（只影响本项目，不污染系统）。
 
-### 第 2 步：运行
+#### 第 2 步：运行
 
 **Windows**：
 
@@ -64,7 +66,7 @@ python3 -m venv .venv
 
 以后每次使用只需重复第 2 步。也可以做个双击启动器：Windows 新建 `启动.bat`，内容一行 `.venv\Scripts\python main.py`；macOS 新建 `启动.command`，内容 `cd "$(dirname "$0")" && .venv/bin/python main.py`（首次需 `chmod +x 启动.command`）。
 
-### 想要免安装双击版？→ 打包
+#### 想要免安装双击版？→ 打包
 
 先装开发依赖（`pip install -r requirements-dev.txt`），再执行 `python build.py`（Windows 用 `.venv\Scripts\python build.py`），产出的 `.exe` / `.app` **自带全部依赖、不需要装 Python**，拷给任何人双击即用。注意**不能交叉编译**，必须在目标平台上打包；注意事项与验证标准见 `docs/FAQ.md`。
 
