@@ -290,6 +290,14 @@
 - **逐例结论**:F1 一致性用例经 D39（F1 永远全长）自愈；4 个 plan 级用例改字体驱动构造；三码等长省略的头部断言从硬编码 `1: 86` 改为语义化。
 - **后果**：本地 macOS 151 passed 全绿；Windows 无法本地验证，但构造已消除字体变量（断言输入由本地字体实测决定）。
 
+## D42 worker 竞态根治：解释器退出兜底（atexit）+ 优雅停机（2026-07-24）
+
+- **背景**:D37 把 worker 引用移到模块级 `_ACTIVE_WORKERS` 后，`test_worker_race` 全绿，但 macOS CI 的 smoke 仍报 `RuntimeError: Signal source has been deleted` ×3 + 「仍有 1 个任务未完成」。
+- **完整链路（CI 日志实证）**:CI 慢机上 `real_drug_labels.png` 解码需 ~31.6s > smoke 的 `waitForDone(30000)` → 超时断言失败 → 解释器开始关闭 → **模块全局（含注册表）被回收** → worker 收尾 emit 时 signals 已被回收。D37 的注册表在正常运行期有效，但救不了**解释器关闭路径**——注册表自己也是模块全局。
+- **决策（三层根治）**:① `main_window.py` 模块级 `atexit.register(_wait_workers_at_exit)`——atexit 先于模块全局回收执行，给 worker 收尾窗口（5s），任何退出路径（异常/sys.exit）都覆盖;② `main.py` 在 `app.exec()` 后 `QThreadPool.waitForDone(3000)` + 日志（生产优雅停机）;③ `_run` 重构：decode-except 与 emit 分离（此前 emit 崩溃会误记"解码失败"并触发第二次崩溃 emit，×3 变 ×2 的原因之一）;④ smoke `waitForDone` 30s → 240s（CI 慢机大图解码合法慢）。
+- **验证证据**：对照实验——注销 atexit 的脚本复现 1 次 RuntimeError，带 atexit 的脚本 0 次；新增子进程回归测试（解码中 `sys.exit(1)`，stderr 断言无「Signal source has been deleted」);smoke 本地连跑 5 次全 OK。
+- **弃项**:emit 处 try/except（掩盖崩溃，用户明确禁止）。
+
 ---
 
 ## 已知限制登记（随解决随更新）

@@ -95,6 +95,15 @@ class _WorkerSignals(QObject):
 _ACTIVE_WORKERS: set = set()
 
 
+def _wait_workers_at_exit():
+    """解释器退出前的兜底等待（D41）：atexit 先于模块全局回收执行，
+    给后台 worker 收尾窗口，避免关闭期间 emit 撞到被回收的 signals。"""
+    QThreadPool.globalInstance().waitForDone(5000)
+
+
+atexit.register(_wait_workers_at_exit)
+
+
 class _DecodeWorker(QRunnable):
     def __init__(self, path: str, tier: str = "balanced",
                  format_names: list[str] | None = None,
@@ -116,24 +125,25 @@ class _DecodeWorker(QRunnable):
 
     def _run(self):
         start = time.perf_counter()
+        error = ""
         try:
             results, attempts = decode_image_detailed(
                 self.path, tier=self.tier,
                 formats=formats_flag(self.format_names),
                 include_suspect=self.include_suspect,
                 profile=self.profile)
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.info("解码 %s: %d 个码, %.0f ms", self.path, len(results), elapsed_ms)
-            meta = {"attempts": attempts_to_dicts(attempts)}
-            try:
-                meta["sha256"] = hashlib.sha256(Path(self.path).read_bytes()).hexdigest()
-                meta["features"] = extract_features_from_path(self.path)
-            except Exception:  # noqa: BLE001 - 元数据失败不影响解码结果
-                logger.exception("图像特征/哈希提取失败: %s", self.path)
-            self.signals.finished.emit(self.path, results, "", meta)
         except Exception as exc:  # noqa: BLE001
             logger.exception("解码失败: %s", self.path)
-            self.signals.finished.emit(self.path, [], str(exc), {})
+            results, attempts, error = [], [], str(exc)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info("解码 %s: %d 个码, %.0f ms", self.path, len(results), elapsed_ms)
+        meta = {"attempts": attempts_to_dicts(attempts)}
+        try:
+            meta["sha256"] = hashlib.sha256(Path(self.path).read_bytes()).hexdigest()
+            meta["features"] = extract_features_from_path(self.path)
+        except Exception:  # noqa: BLE001 - 元数据失败不影响解码结果
+            logger.exception("图像特征/哈希提取失败: %s", self.path)
+        self.signals.finished.emit(self.path, results, error, meta)
 
 
 class PreviewArea(PreviewView):

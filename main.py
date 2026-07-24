@@ -69,6 +69,11 @@ def main() -> int:
     win = MainWindow()
     win.show()
     code = app.exec()
+    # 优雅停机：退出前给后台 worker 一个收尾窗口，避免解释器关闭时
+    # worker emit 撞到已删除的 signals（D41）
+    from PySide6.QtCore import QThreadPool
+    if not QThreadPool.globalInstance().waitForDone(3000):
+        logger.warning("退出时仍有后台解码任务未完成（已强制结束）")
     logger.info("应用退出，退出码 %d", code)
     return code
 

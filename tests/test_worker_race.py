@@ -82,3 +82,42 @@ def test_rebuilt_window_after_close(qapp, tmp_path):
     assert len(win2.results) == 1
     assert not mw._ACTIVE_WORKERS
     win2.close()
+
+
+RACE_REPRO_SCRIPT = '''
+import os, sys
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, {project_root!r})
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication
+from profiles import ProfileStore
+from templates import TemplateStore
+from ui.main_window import MainWindow
+import tempfile
+from pathlib import Path
+
+td = tempfile.mkdtemp()
+app = QApplication([])
+win = MainWindow(
+    settings=QSettings(str(Path(td) / "s.ini"), QSettings.IniFormat),
+    history_db=Path(td) / "h.db",
+    profile_store=ProfileStore(Path(td) / "p.json"),
+    template_store=TemplateStore(Path(td) / "t.json"))
+win.add_paths([{image!r}])
+sys.exit(1)  # 不等待解码完成直接退出：atexit 应兜底等 worker 收尾
+'''
+
+
+def test_interpreter_exit_with_running_worker(qapp):
+    """CI smoke 竞态复现（D41）：解码进行中解释器退出，atexit 兜底后
+    stderr 不得出现 "Signal source has been deleted"。"""
+    import subprocess
+    project_root = str(Path(__file__).resolve().parent.parent)
+    script = RACE_REPRO_SCRIPT.format(
+        project_root=project_root,
+        image=str(IMG_DIR / "hard_big.png"))
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=120)
+    assert "Signal source has been deleted" not in proc.stderr, \
+        f"解释器退出时 worker emit 崩溃: {proc.stderr[:500]}"

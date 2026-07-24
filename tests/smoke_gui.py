@@ -60,8 +60,8 @@ def main() -> int:
         assert win.file_list.count() == len(images), \
             f"列表应有 {len(images)} 项，实际 {win.file_list.count()}"
 
-        # 等待后台解码完成
-        win._pool.waitForDone(30000)
+        # 等待后台解码完成（CI 慢机上大图/难图可能超过 30s，给足余量）
+        win._pool.waitForDone(240000)
         app.processEvents()
         assert win._pending <= 0, f"仍有 {win._pending} 个任务未完成"
 
