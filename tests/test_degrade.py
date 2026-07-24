@@ -50,7 +50,7 @@ def _metrics():
 def test_plan_normal_full(qapp):
     tw, th = _metrics()
     placed = []
-    layout = plan_label(_frame(), tw, th, 20.0, 400, 400, placed)
+    layout = plan_label(_frame(), tw, th, 400, 400, placed)
     assert layout.mode == "full" and layout.text == frame_label(_frame())
     assert len(placed) == 1
 
@@ -61,18 +61,19 @@ def test_plan_collision_only_second_degrades(qapp):
     f1 = _frame(x=20, y=30)
     f2 = _frame(x=25, y=35, seq=2)
     placed = []
-    l1 = plan_label(f1, tw, th, 20.0, 400, 400, placed)
-    l2 = plan_label(f2, tw, th, 20.0, 400, 400, placed)
+    l1 = plan_label(f1, tw, th, 400, 400, placed)
+    l2 = plan_label(f2, tw, th, 400, 400, placed)
     assert l1.mode == "full", "先画的保留全长"
     assert l2.mode == "badge" and l2.text == "2", "后冲突的降级为徽标"
 
 
-def test_plan_tiny_font_degrades(qapp):
+def test_plan_no_font_trigger_full(qapp):
+    """D33：有效字高小不再独立降级——单码任何缩放都应全长（渲染层字号下限兜底）。"""
     tw, th = _metrics()
     placed = []
-    layout = plan_label(_frame(), tw, th, 6.0, 400, 400, placed)
-    assert layout.mode == "badge" and layout.text == "1"
-    assert not placed  # 降级不占碰撞位
+    layout = plan_label(_frame(), tw, th, 400, 400, placed)
+    assert layout.mode == "full"
+    assert len(placed) == 1
 
 
 def test_plan_long_label_clamped_into_bounds(qapp):
@@ -86,7 +87,7 @@ def test_plan_long_label_clamped_into_bounds(qapp):
     th = m.height() + 2
     f = _frame(x=200, y=30, seq=1, content=long_content)
     placed = []
-    layout = plan_label(f, tw, th, 20.0, 400, 400, placed)
+    layout = plan_label(f, tw, th, 400, 400, placed)
     assert layout.mode == "full"
     assert layout.x >= 0 and layout.x + layout.w <= 400, "越界标签应收进界内"
 
@@ -94,13 +95,8 @@ def test_plan_long_label_clamped_into_bounds(qapp):
 def test_plan_out_of_bounds_degrades(qapp):
     tw, th = _metrics()
     # 框贴图片顶部且标签放框内也出界？构造框超出图片 → 标签出界降级
-    f = _frame(x=350, y=30, w=100, h=100)  # 框在图内，但文本在框上方出界? th>y 时入框内
-    placed = []
-    layout = plan_label(f, tw, th, 20.0, 400, 400, placed)
-    # 框内放不下（350+tw>400 且框左 350，文本宽>50 → 收边后 x+tw<=400 成立 → full
-    assert layout.mode in ("full", "badge")  # 路径不崩即可
-    # 直接构造必然出界：图片极小
-    layout2 = plan_label(_frame(), tw, th, 20.0, 40, 40, [])
+    # 极端窄图：全长标签收边后仍放不进图片 → 降级徽标（触发条件②）
+    layout2 = plan_label(_frame(), tw, th, 40, 40, [])
     assert layout2.mode == "badge"
 
 
@@ -153,7 +149,7 @@ def test_three_vertical_degrade_and_restore(qapp, tmp_path):
     texts = _label_texts(win.preview)
     assert len(texts) == 3
 
-    # 大图（适应窗口缩放比小 → 有效字高 <10px）→ 降级为徽标
+    # 大图（适应窗口缩放比小）少码场景：字号下限保持可读，仍显示全长标签（D33）
     win2 = _make_window(tmp_path / "big")
     win2.add_paths([str(_make_three_vertical(tmp_path, big=True))])
     win2._pool.waitForDone(30000)
@@ -161,11 +157,40 @@ def test_three_vertical_degrade_and_restore(qapp, tmp_path):
     win2.file_list.setCurrentRow(0)
     qapp.processEvents()
     texts_small = _label_texts(win2.preview)
-    badges = [t for t in texts_small if ": " not in t]
-    assert len(badges) >= 1, f"小缩放比应有降级徽标: {texts_small}"
-    for b in badges:
-        assert len(b) <= 3, f"徽标应为短文本: {b!r}"
+    assert all(": " in t for t in texts_small), \
+        f"少码场景任何缩放都应全长显示: {texts_small}"
     win2.close()
+
+
+def _make_dense_horizontal(tmp_path):
+    """多码密集场景：大画布小缩放 → 字号下限使长标签变宽，同排标签水平碰撞。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    from gen_test_images import make_barcode, pad
+    from PIL import Image
+    canvas = Image.new("L", (2400, 300), 255)
+    for i in range(3):
+        code = pad(make_barcode(f"DENSE-CODE-LONG-CONTENT-{i}", "Code128", 300, 110), 10)
+        canvas.paste(code, (60 + i * 400, 90))
+    path = tmp_path / "dense_horizontal.png"
+    canvas.save(path)
+    return path
+
+
+def test_dense_codes_badge_on_collision(qapp, tmp_path):
+    """多码密集场景：小缩放 + 字号下限使标签碰撞 → 后画者降级为徽标。"""
+    win = _make_window(tmp_path)
+    win.add_paths([str(_make_dense_horizontal(tmp_path))])
+    win._pool.waitForDone(30000)
+    qapp.processEvents()
+    win.file_list.setCurrentRow(0)
+    qapp.processEvents()
+    texts = _label_texts(win.preview)
+    assert len(texts) == 3
+    badges = [t for t in texts if ": " not in t]
+    full = [t for t in texts if ": " in t]
+    assert len(badges) >= 1, f"密集碰撞应有降级徽标: {texts}"
+    assert len(full) >= 1, "先画的保留全长"
+    win.close()
 
     # F1 放大后恢复全长
     win.open_preview_window()

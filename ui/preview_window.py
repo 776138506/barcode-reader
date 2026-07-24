@@ -197,13 +197,15 @@ def _rects_collide(a, b) -> bool:
 
 
 def plan_label(frame: Frame, text_w: float, text_h: float,
-               effective_font_px: float, img_w: float, img_h: float,
+               img_w: float, img_h: float,
                placed: list, pad: float = 2.0) -> LabelLayout:
-    """计算标签布局；以下任一条件触发时降级为紧凑徽标（D31）：
+    """计算标签布局（D31 初版，D33 修正触发条件）。
 
-    - 有效字高 < MIN_FONT_PX（小缩放比下不可读）
-    - 渲染矩形超出图片边界（翻转后仍出界）
-    - 与已绘制标签碰撞（先画的保留全长，后冲突的降级）
+    降级为紧凑徽标仅在两种情形触发：
+    ① 与已绘制标签实际碰撞（先画保留全长，后冲突降级）；
+    ② 收进边界后仍无法完整放置全长标签（如极端窄图）。
+    有效字高不再是独立降级触发——字号下限（MIN_FONT_PX，屏幕像素）
+    在渲染层兜底，小缩放下标签保持最小可读字号（D33）。
 
     placed 为本轮已确认的全长标签矩形（就地追加）。badge 锚在框角内侧左上。
     """
@@ -231,7 +233,7 @@ def plan_label(frame: Frame, text_w: float, text_h: float,
     out_of_bounds = (rect[0] < 0 or rect[2] > img_w
                      or rect[1] < 0 or rect[3] > img_h)
     collide = any(_rects_collide(rect, r) for r in placed)
-    if effective_font_px >= MIN_FONT_PX and not out_of_bounds and not collide:
+    if not out_of_bounds and not collide:
         placed.append(rect)
         return layout
 
@@ -368,17 +370,19 @@ class PreviewView(QGraphicsView):
         self._scene.addItem(poly_item)
         self._frame_items.append(poly_item)
 
-        # 标签布局（含降级判定，D31）：样式仍走 label_style 单一来源
+        # 标签布局（含降级判定，D31/D33）：样式仍走 label_style 单一来源；
+        # 字号下限：有效屏幕字高不低于 MIN_FONT_PX（小缩放下标签保持可读）
         rect = poly.boundingRect()
         font = QFont()
-        font.setPixelSize(label_font_size(rect.width(), rect.height()))
+        font_px = max(label_font_size(rect.width(), rect.height()),
+                      math.ceil(MIN_FONT_PX / self._effective_font_scale()))
+        font.setPixelSize(font_px)
         bg_color, text_color, bold = label_style(frame, state)
         font.setBold(bold)
         metrics = QFontMetricsF(font)
         text_w = metrics.horizontalAdvance(frame_label(frame)) + 4
         text_h = metrics.height() + 2
-        eff_px = font.pixelSize() * self._effective_font_scale()
-        layout = plan_label(frame, text_w, text_h, eff_px, img_w, img_h, placed)
+        layout = plan_label(frame, text_w, text_h, img_w, img_h, placed)
         if layout.mode == "badge":
             layout.w = metrics.horizontalAdvance(layout.text) + 6
         group = QGraphicsItemGroup()
