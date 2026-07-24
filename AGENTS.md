@@ -14,7 +14,7 @@
 ```bash
 source .venv/bin/activate        # 所有依赖只装进 .venv，禁止污染系统 Python
 python main.py                   # 运行
-pytest tests/ -q                 # 测试（当前 136 个，含 1 个 ~12s 的 slow 真实图验收）
+pytest tests/ -q                 # 测试（当前 139 个，含 1 个 ~12s 的 slow 真实图验收）
 QT_QPA_PLATFORM=offscreen python tests/smoke_gui.py   # 无头 GUI 冒烟
 python build.py                  # PyInstaller 打包（不能交叉编译，须在目标平台执行）
 ```
@@ -38,7 +38,7 @@ python build.py                  # PyInstaller 打包（不能交叉编译，须
 - 测试用 QMimeData 构造 urls 直接调用事件处理函数模拟拖放（见 `tests/test_dragdrop.py` / `tests/smoke_gui.py`）
 - `PreviewLabel.show_image` 加载失败必须清空旧 pixmap 并显示提示——残留上一张图会被用户当成"预览失效/串图"（回归测试 `tests/test_preview.py`）
 - **对话框高度必须考虑小屏幕**：内容多的自定义对话框一律用 `ui/scroll_helper.py` 的 `wrap_scrollable()`（内容进 QScrollArea、按钮栏固定在外）+ `cap_dialog_height()`（上限 = 光标所在屏可用高度 × 0.8）；新增对话框对照 `tests/test_dialogs.py` 补断言
-- **标记帧统一走 `ui/preview_window.py` 的 Frame 模型**：渲染统一为 `PreviewView(QGraphicsView)`（D32，主预览嵌入模式 + F1 交互模式共用），共享 `build_frames/frame_label/label_style/label_placement/frame_angle/rotated_label_anchor/plan_label/frame_color/frame_state`——标签为 `N: 内容`（疑似 `N?: 内容`，>24 字符截断加 …）；标签方向与码长边对齐（<5° 走水平旧路径）；**自适应降级（D31/D33）**：降级仅两条件——与已绘制标签实际碰撞（先画保留全长，后冲突降级）、收进边界后仍无法完整放置全长标签（极端窄图）；**字号下限在渲染层兜底**（`font_px = max(label_font_size(box), ceil(10 / view_scale))`，小缩放下标签保持最小可读字号，允许标签比框宽，水平长标签先平移收边）；字高本身不触发降级（D31 初版规则过于激进，D33 修正）；缩放/尺寸变化实时重算；底色块视觉规范：普通黑 65% + 白字、疑似深黄 65% + 白字、高亮橙底不透明 + 白字加粗、dim 底 40/字 60；框序号 = 结果表格「序号」列（跨图累加，`MainWindow._frames_for()`）；结果表格垂直行号表头一律隐藏（与「序号」列重复）
+- **标记帧统一走 `ui/preview_window.py` 的 Frame 模型**：渲染统一为 `PreviewView(QGraphicsView)`（D32，主预览嵌入模式 + F1 交互模式共用），共享 `build_frames/frame_label/label_style/label_placement/frame_angle/rotated_label_anchor/plan_label/frame_color/frame_state`——标签为 `N: 内容`（疑似 `N?: 内容`，>24 字符截断加 …）；标签方向与码长边对齐（<5° 走水平旧路径）；**自适应省略与降级（D35/D31/D33）**：标签目标宽度 = 绿框长边（`frame_long_edge`）；全长放不下 → 中间省略 `前k…后k`（k 每级减 2，序号永不省略，最短 `N: a…b`）→ 最短仍超才降级徽标；降级另两触发：与已绘制标签实际碰撞（先画保留全长）、收进边界后仍无法放置（极端窄图）；字号下限渲染层兜底（`font_px = max(label_font_size(box), ceil(10 / view_scale))`）；省略在碰撞判定之前作用于文本；宽度一律 QFontMetrics 实测（D34：禁止硬编码字符数）；缩放/尺寸变化实时重算；底色块视觉规范：普通黑 65% + 白字、疑似深黄 65% + 白字、高亮橙底不透明 + 白字加粗、dim 底 40/字 60；框序号 = 结果表格「序号」列（跨图累加，`MainWindow._frames_for()`）；结果表格垂直行号表头一律隐藏（与「序号」列重复）
 - **用户操作反馈三档（D25）**：成功 = 状态栏带量化信息（条数/字符数/名称，8s）；空态/可预期失败 = 状态栏提示或 `QMessageBox.warning`（阻断性操作用弹窗）；异常失败 = `logger.exception` + 弹窗（导出）或列表项状态（解码）。禁止静默吞异常（catch 必须记日志或给用户反馈），新增按钮动作对照 `tests/test_feedback.py` 补断言
 - **调试脚本不得对 `tests/images/` 里的原始测试图执行重命名等破坏性操作**——重命名只对 tmp 副本进行（曾有调试脚本把 qr_hello.png 改名导致测试图缺失）
 

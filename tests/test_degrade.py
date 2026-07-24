@@ -38,70 +38,56 @@ def _frame(x=20, y=30, w=100, h=100, seq=1, content="abc"):
                  seq=seq, suspect=False, content=content)
 
 
-def _metrics():
+def _font(px=20):
     font = QFont()
-    font.setPixelSize(20)
-    m = QFontMetricsF(font)
-    return m.horizontalAdvance("1: abc") + 4, m.height() + 2
+    font.setPixelSize(px)
+    return font
 
 
 # ---------- plan_label 判定 ----------
 
 def test_plan_normal_full(qapp):
-    tw, th = _metrics()
     placed = []
-    layout = plan_label(_frame(), tw, th, 400, 400, placed)
+    layout = plan_label(_frame(), _font(), 400, 400, placed)
     assert layout.mode == "full" and layout.text == frame_label(_frame())
     assert len(placed) == 1
 
 
 def test_plan_collision_only_second_degrades(qapp):
-    tw, th = _metrics()
     # 两个框位置几乎相同 → 标签必然碰撞
     f1 = _frame(x=20, y=30)
     f2 = _frame(x=25, y=35, seq=2)
     placed = []
-    l1 = plan_label(f1, tw, th, 400, 400, placed)
-    l2 = plan_label(f2, tw, th, 400, 400, placed)
+    l1 = plan_label(f1, _font(), 400, 400, placed)
+    l2 = plan_label(f2, _font(), 400, 400, placed)
     assert l1.mode == "full", "先画的保留全长"
     assert l2.mode == "badge" and l2.text == "2", "后冲突的降级为徽标"
 
 
 def test_plan_no_font_trigger_full(qapp):
     """D33：有效字高小不再独立降级——单码任何缩放都应全长（渲染层字号下限兜底）。"""
-    tw, th = _metrics()
     placed = []
-    layout = plan_label(_frame(), tw, th, 400, 400, placed)
+    layout = plan_label(_frame(), _font(), 400, 400, placed)
     assert layout.mode == "full"
     assert len(placed) == 1
 
 
-def test_plan_long_label_clamped_into_bounds(qapp):
-    """长标签超出图片宽度 → 平移收进界内而不是降级。
-
-    用 15 字符内容：在任平台字体下标签宽度都 < 400px（字体宽度差异不影响，
-    见 DECISIONS D34）。框放在右缘，标签须被平移收边。"""
-    font = QFont()
-    font.setPixelSize(20)
+def test_plan_long_label_elided_to_box_edge(qapp):
+    """等长省略（D35）：全长标签超过框长边 → 中间省略到 ≤ 框长边。"""
     content = "LONG-CONTENT-15"
-    shown = f"1: {content}"  # 未超 24 字符不截断
-    m = QFontMetricsF(font)
-    tw = m.horizontalAdvance(shown) + 4
-    th = m.height() + 2
-    assert tw < 400, f"本机字体下标签已超宽 ({tw})，需再缩短内容"
-    f = _frame(x=250, y=30, seq=1, content=content)
+    f = _frame(x=250, y=30, seq=1, content=content)  # 框长边 100px
     placed = []
-    layout = plan_label(f, tw, th, 400, 400, placed)
+    layout = plan_label(f, _font(), 400, 400, placed)
     assert layout.mode == "full"
-    assert layout.x < 250, "右缘框的标签应被平移收边"
-    assert layout.x >= 0 and layout.x + layout.w <= 400, "越界标签应收进界内"
+    assert "…" in layout.text, f"长内容应被省略: {layout.text!r}"
+    assert layout.w <= 104, f"省略后标签宽度应 ≤ 框长边: {layout.w}"
+    assert layout.text.startswith("1: ")
+    assert layout.text.endswith("5"), "省略应保留尾部字符"
 
 
 def test_plan_out_of_bounds_degrades(qapp):
-    tw, th = _metrics()
-    # 框贴图片顶部且标签放框内也出界？构造框超出图片 → 标签出界降级
-    # 极端窄图：全长标签收边后仍放不进图片 → 降级徽标（触发条件②）
-    layout2 = plan_label(_frame(), tw, th, 40, 40, [])
+    # 极端窄图（40x40）：省略后标签放置仍出图片边界 → 降级徽标（触发条件②）
+    layout2 = plan_label(_frame(), _font(), 40, 40, [])
     assert layout2.mode == "badge"
 
 
@@ -182,39 +168,26 @@ def _make_dense_horizontal(tmp_path):
     return path
 
 
-def test_dense_codes_badge_on_collision(qapp, tmp_path):
-    """多码密集场景：小缩放 + 字号下限使标签碰撞 → 后画者降级为徽标；
-    F1 较大缩放（字号下限不再放大标签）→ 恢复全长。"""
+def test_tiny_box_degrades_to_badge(qapp, tmp_path):
+    """极小的框：最短省略形式 `N: a…b` 仍超框长边 → 降级徽标（GUI 兜底路径）。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    import numpy as np
+    import zxingcpp
+    from PIL import Image
+    b = zxingcpp.create_barcode("TINYBOX-CONTENT", zxingcpp.BarcodeFormat.QRCode)
+    img = Image.fromarray(np.array(b.to_image()))  # 小模块 QR，框长边很小
+    path = tmp_path / "tiny_qr.png"
+    img.save(path)
     win = _make_window(tmp_path)
-    win.add_paths([str(_make_dense_horizontal(tmp_path))])
+    win.add_paths([str(path)])
     win._pool.waitForDone(30000)
     qapp.processEvents()
     win.file_list.setCurrentRow(0)
     qapp.processEvents()
     texts = _label_texts(win.preview)
-    assert len(texts) == 3
-    badges = [t for t in texts if ": " not in t]
-    full = [t for t in texts if ": " in t]
-    assert len(badges) >= 1, f"密集碰撞应有降级徽标: {texts}"
-    assert len(full) >= 1, "先画的保留全长"
-
-    win.open_preview_window()
-    qapp.processEvents()
-    texts_f1 = _label_texts(win._preview_window._view)
-    assert all(": " in t for t in texts_f1), f"F1 较大缩放应恢复全长: {texts_f1}"
-    win._preview_window.close()
-    win.close()
-
-    # F1 放大后恢复全长
-    win.open_preview_window()
-    qapp.processEvents()
-    pw = win._preview_window
-    pw.zoom_in()
-    pw.zoom_in()
-    qapp.processEvents()
-    texts_f1 = _label_texts(pw._view)
-    assert all(": " in t for t in texts_f1), f"放大后应恢复全长: {texts_f1}"
-    pw.close()
+    assert len(texts) == 1
+    assert ": " not in texts[0], f"极小框应降级为徽标: {texts[0]!r}"
+    assert texts[0] == "1"
     win.close()
 
 
@@ -233,4 +206,91 @@ def test_horizontal_code_full_label_regression(qapp, tmp_path):
     qapp.processEvents()
     texts = _label_texts(win.preview)
     assert len(texts) == 1 and ": " in texts[0]
+    win.close()
+
+
+def test_elide_levels_and_restore(qapp):
+    """逐级省略与恢复（D35）：目标宽度越大省略越少，头尾始终保留。"""
+    from ui.preview_window import elide_label
+    content = "ABCDEFGHIJKLMNOP"  # 16 字符
+    f = _frame(seq=1, content=content)
+    font = _font()
+    from PySide6.QtGui import QFontMetricsF
+    m = QFontMetricsF(font)
+    full = frame_label(f)
+    full_w = m.horizontalAdvance(full) + 4
+
+    # 空间充足 → 全长
+    assert elide_label(f, font, full_w + 50) == full
+    # 逐级收紧：文本长度单调不增、头尾保留
+    prev_len = len(full)
+    for target in (full_w * 0.7, full_w * 0.5, full_w * 0.35):
+        text = elide_label(f, font, target)
+        assert text is not None
+        assert "…" in text
+        assert text.startswith("1: A"), f"头部保留: {text!r}"
+        assert text.endswith("P"), f"尾部保留: {text!r}"
+        assert len(text) <= prev_len, f"逐级应单调缩短: {text!r}"
+        prev_len = len(text)
+    # 恢复（放宽目标）→ 回到全长
+    assert elide_label(f, font, full_w + 50) == full
+
+
+def test_elide_min_form_and_badge(qapp):
+    """最短形式 `N: a…b`；仍放不下 → None（徽标兜底）。"""
+    from ui.preview_window import elide_label
+    f = _frame(seq=9, content="XYZABC")
+    font = _font()
+    from PySide6.QtGui import QFontMetricsF
+    m = QFontMetricsF(font)
+    min_w = m.horizontalAdvance("9: X…C") + 4
+    # 刚好容下最短形式
+    assert elide_label(f, font, min_w + 1) == "9: X…C"
+    # 连最短形式都放不下
+    assert elide_label(f, font, min_w - 10) is None
+
+
+def test_three_vertical_elide_equal_length(qapp, tmp_path):
+    """竖排三码（20 位内容）小缩放：三标签均省略为 `前…后` 且与各自框等长（D35）。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    from gen_test_images import make_barcode, pad
+    from PIL import Image
+    canvas = Image.new("L", (1400, 1700), 255)
+    contents = ["86316420001266495057", "86316420001266482464", "86316420001266475982"]
+    for i, c in enumerate(contents):
+        code = pad(make_barcode(c, "Code128", 400, 130), 15)
+        code = code.rotate(-90, expand=True, fillcolor=255)
+        canvas.paste(code, (80 + i * 420, 150))
+    path = tmp_path / "three_vertical_elide.png"
+    canvas.save(path)
+
+    win = _make_window(tmp_path)
+    win.add_paths([str(path)])
+    win._pool.waitForDone(30000)
+    qapp.processEvents()
+    win.file_list.setCurrentRow(0)
+    qapp.processEvents()
+
+    texts = _label_texts(win.preview)
+    assert len(texts) == 3, f"应三个标签: {texts}"
+    for i, t in enumerate(texts):
+        assert "…" in t, f"长内容应省略: {t!r}"
+        assert t.startswith(f"{i + 1}: 86"), f"头部保留: {t!r}"
+        assert t.endswith(contents[i][-2:]), f"尾部保留: {t!r}"
+
+    # 等长断言：布局宽度 ≈ 各自框长边（本机字体实测，不用硬编码宽度）
+    import math
+    from ui.preview_window import frame_long_edge, plan_label, label_font_size
+    scale = win.preview._effective_font_scale()
+    for frame in win.preview._frames:
+        xs = [p[0] for p in frame.points]
+        ys = [p[1] for p in frame.points]
+        box_w = max(xs) - min(xs)
+        box_h = max(ys) - min(ys)
+        font_px = max(label_font_size(box_w, box_h), math.ceil(10 / scale))
+        layout = plan_label(frame, _font(font_px), canvas.size[0], canvas.size[1], [])
+        edge = frame_long_edge(frame)
+        assert layout.mode == "full"
+        assert layout.w <= edge + 6, f"标签应 ≤ 框长边: {layout.w} > {edge}"
+        assert layout.w >= edge * 0.5, f"标签不应过度省略: {layout.w} << {edge}"
     win.close()

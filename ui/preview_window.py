@@ -68,6 +68,14 @@ def frame_color(frame: Frame, state: str) -> QColor:
     return color
 
 
+def frame_long_edge(frame: Frame) -> float:
+    """绿框长边长度（沿阅读方向的可用标签长度，D35 等长省略的目标）。"""
+    (x1, y1), (x2, y2), (x3, y3), (x4, y4) = frame.points
+    e1 = math.hypot(x2 - x1, y2 - y1)
+    e2 = math.hypot(x3 - x2, y3 - y2)
+    return max(e1, e2)
+
+
 def frame_label(frame: Frame) -> str:
     """标签文本：`N: 内容`（疑似 `N?: 内容`），内容 >24 字符截断加 …。"""
     text = frame.content
@@ -196,37 +204,89 @@ def _rects_collide(a, b) -> bool:
     return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
 
 
-def plan_label(frame: Frame, text_w: float, text_h: float,
+def elide_label(frame: Frame, font, target_w: float) -> str | None:
+    """中间省略的自适应标签（D35）：目标宽度 = 绿框长边。
+
+    - 全长 `N: 内容`（疑似 `N?: 内容`）渲染宽 ≤ target_w → 原样返回
+    - 否则内容中间省略为 `前k…后k`，k 从 max((len-1)//2, 1) 起每级减 2，
+      最短形式 `N: a…b`（k=1）
+    - 序号永不省略；最短形式仍超 target_w → 返回 None（调用方降级徽标）
+    宽度一律用传入 font 的 QFontMetricsF 实测（不硬编码字符数，D34 教训）。
+    """
+    from PySide6.QtGui import QFontMetricsF
+    metrics = QFontMetricsF(font)
+    full = frame_label(frame)
+    if metrics.horizontalAdvance(full) + 4 <= target_w:
+        return full
+    prefix = f"{frame.seq}{'?' if frame.suspect else ''}: "
+    content = frame.content
+    max_k = max((len(content) - 1) // 2, 1)
+    k = max_k
+    while k >= 1:
+        text = f"{prefix}{content[:k]}…{content[-k:]}"
+        if metrics.horizontalAdvance(text) + 4 <= target_w:
+            return text
+        k -= 2
+    # 步进可能跳过 k=1（max_k 为偶数时），最短形式兜底再试
+    text = f"{prefix}{content[:1]}…{content[-1:]}"
+    if metrics.horizontalAdvance(text) + 4 <= target_w:
+        return text
+    return None
+
+
+def _badge_layout(frame: Frame, metrics) -> "LabelLayout":
+    """紧凑徽标布局：锚在框角内侧（左上）。"""
+    xs = [p[0] for p in frame.points]
+    ys = [p[1] for p in frame.points]
+    text = f"{frame.seq}{'?' if frame.suspect else ''}"
+    return LabelLayout(mode="badge", text=text,
+                       x=min(xs) + 2, y=min(ys) + 2,
+                       w=metrics.horizontalAdvance(text) + 6,
+                       h=metrics.height() + 2, angle=0.0)
+
+
+def plan_label(frame: Frame, font,
                img_w: float, img_h: float,
                placed: list, pad: float = 2.0) -> LabelLayout:
-    """计算标签布局（D31 初版，D33 修正触发条件）。
+    """计算标签布局（D31/D33 降级 + D35 等长省略）。
 
-    降级为紧凑徽标仅在两种情形触发：
-    ① 与已绘制标签实际碰撞（先画保留全长，后冲突降级）；
-    ② 收进边界后仍无法完整放置全长标签（如极端窄图）。
-    有效字高不再是独立降级触发——字号下限（MIN_FONT_PX，屏幕像素）
-    在渲染层兜底，小缩放下标签保持最小可读字号（D33）。
+    文本生成（省略在碰撞判定之前）：
+    - 目标宽度 = 绿框长边（frame_long_edge）；全长 `N: 内容` 渲染宽 ≤ 目标
+      → 原样；超过 → 中间省略 `前k…后k`（elide_label，序号永不省略）；
+      最短形式仍超 → 直接降级徽标。
+    布局与降级（D33 规则不变）：
+    - 水平码（<5°）：锚定框上方，标签平移收进图片边界（次级兜底）；
+      旋转码：D30 frame-relative 锚定沿长边贴框。
+    - 与已绘制标签碰撞 → 降级徽标（先画保留全长，后冲突降级）；
+      渲染矩形出图片边界 → 降级徽标。
 
-    placed 为本轮已确认的全长标签矩形（就地追加）。badge 锚在框角内侧左上。
+    placed 为本轮已确认的全长标签矩形（就地追加）。
     """
+    from PySide6.QtGui import QFontMetricsF
+    metrics = QFontMetricsF(font)
     angle = frame_angle(frame)
+    text = elide_label(frame, font, frame_long_edge(frame))
+    if text is None:
+        return _badge_layout(frame, metrics)
+    text_w = metrics.horizontalAdvance(text) + 4
+    text_h = metrics.height() + 2
     if abs(angle) < LABEL_ANGLE_THRESHOLD:
         xs = [p[0] for p in frame.points]
         ys = [p[1] for p in frame.points]
         box_w = max(xs) - min(xs)
         box_h = max(ys) - min(ys)
         lx, ly = label_placement(min(xs), min(ys), box_w, box_h, text_w, text_h)
-        # 水平长标签收进界内（旧行为允许溢出，改为平移收边；放不下才降级）
+        # 水平标签平移收进图片边界（次级兜底）
         if text_w <= img_w:
             lx = min(max(lx, 0.0), img_w - text_w)
         else:
             lx = 0.0
-        layout = LabelLayout(mode="full", text=frame_label(frame),
+        layout = LabelLayout(mode="full", text=text,
                              x=lx, y=ly, w=text_w, h=text_h, angle=0.0)
     else:
         ax, ay, angle = rotated_label_anchor(frame, angle, text_w, text_h,
                                              img_w, img_h, pad)
-        layout = LabelLayout(mode="full", text=frame_label(frame),
+        layout = LabelLayout(mode="full", text=text,
                              x=ax, y=ay, w=text_w, h=text_h, angle=angle)
 
     rect = _rect_of(layout)
@@ -236,15 +296,7 @@ def plan_label(frame: Frame, text_w: float, text_h: float,
     if not out_of_bounds and not collide:
         placed.append(rect)
         return layout
-
-    # 降级：紧凑徽标，锚在框角内侧（左上）
-    xs = [p[0] for p in frame.points]
-    ys = [p[1] for p in frame.points]
-    badge_text = f"{frame.seq}{'?' if frame.suspect else ''}"
-    badge_w = min(text_w, 8 * len(badge_text) + 10)
-    return LabelLayout(mode="badge", text=badge_text,
-                       x=min(xs) + 2, y=min(ys) + 2,
-                       w=badge_w, h=text_h, angle=0.0)
+    return _badge_layout(frame, metrics)
 
 
 def label_font_size(box_w: float, box_h: float) -> int:
@@ -370,7 +422,7 @@ class PreviewView(QGraphicsView):
         self._scene.addItem(poly_item)
         self._frame_items.append(poly_item)
 
-        # 标签布局（含降级判定，D31/D33）：样式仍走 label_style 单一来源；
+        # 标签布局（等长省略 + 降级判定，D35/D33）：样式仍走 label_style 单一来源；
         # 字号下限：有效屏幕字高不低于 MIN_FONT_PX（小缩放下标签保持可读）
         rect = poly.boundingRect()
         font = QFont()
@@ -379,12 +431,7 @@ class PreviewView(QGraphicsView):
         font.setPixelSize(font_px)
         bg_color, text_color, bold = label_style(frame, state)
         font.setBold(bold)
-        metrics = QFontMetricsF(font)
-        text_w = metrics.horizontalAdvance(frame_label(frame)) + 4
-        text_h = metrics.height() + 2
-        layout = plan_label(frame, text_w, text_h, img_w, img_h, placed)
-        if layout.mode == "badge":
-            layout.w = metrics.horizontalAdvance(layout.text) + 6
+        layout = plan_label(frame, font, img_w, img_h, placed)
         group = QGraphicsItemGroup()
         bg = QGraphicsRectItem(0, 0, layout.w, layout.h, group)
         bg.setPen(QPen(Qt.NoPen))
