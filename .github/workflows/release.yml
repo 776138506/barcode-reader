@@ -26,6 +26,7 @@ jobs:
             package: tar
     env:
       QT_QPA_PLATFORM: offscreen
+      PYTHONIOENCODING: utf-8
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4

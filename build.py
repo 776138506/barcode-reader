@@ -21,6 +21,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows CI 控制台默认 cp1252，中文输出会 UnicodeEncodeError（D41 原则：
+# CLI 脚本内重配置 UTF-8）
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+import sys
+from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent
 APP_NAME = "BarcodeReader"
 
