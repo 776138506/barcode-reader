@@ -174,7 +174,16 @@ def rotated_label_anchor(frame: Frame, angle: float,
                for u in (0.0, text_w) for v in (0.0, text_h)]
     if any(px < 0 or px > img_w or py < 0 or py > img_h for px, py in corners):
         x, y = _origin(not away)  # 出界翻到框另一侧
-    return x, y, angle
+    # 翻转后仍出界（图顶/图左等单翻盖不住的方向）→ 平移收进界内（D39）
+    corners = [(x + u * e[0] + v * m[0], y + u * e[1] + v * m[1])
+               for u in (0.0, text_w) for v in (0.0, text_h)]
+    min_x = min(c[0] for c in corners)
+    max_x = max(c[0] for c in corners)
+    min_y = min(c[1] for c in corners)
+    max_y = max(c[1] for c in corners)
+    dx = (-min_x) if min_x < 0 else (img_w - max_x if max_x > img_w else 0.0)
+    dy = (-min_y) if min_y < 0 else (img_h - max_y if max_y > img_h else 0.0)
+    return x + dx, y + dy, angle
 
 
 # ---------------------------------------------------------------- 标签降级（D31）
@@ -254,6 +263,40 @@ def _badge_layout(frame: Frame, metrics) -> "LabelLayout":
                        h=metrics.height() + 2, angle=0.0)
 
 
+def _full_label_layout(frame: Frame, font,
+                       img_w: float, img_h: float,
+                       pad: float = 2.0) -> LabelLayout:
+    """F1（交互模式）专用：标签永远全长（D39）。
+
+    不省略、不降级徽标、不做碰撞处理（用户可缩放平移查看）；
+    锚定规则与主预览一致（水平贴框上方、旋转沿长边贴框），
+    出图片边界时翻转/平移收进界内保证完整可见。
+    """
+    from PySide6.QtGui import QFontMetricsF
+    metrics = QFontMetricsF(font)
+    text = frame_label(frame)
+    text_w = metrics.horizontalAdvance(text) + 4
+    text_h = metrics.height() + 2
+    angle = frame_angle(frame)
+    if abs(angle) < LABEL_ANGLE_THRESHOLD:
+        xs = [p[0] for p in frame.points]
+        ys = [p[1] for p in frame.points]
+        box_w = max(xs) - min(xs)
+        box_h = max(ys) - min(ys)
+        lx, ly = label_placement(min(xs), min(ys), box_w, box_h, text_w, text_h)
+        if text_w <= img_w:
+            lx = min(max(lx, 0.0), img_w - text_w)
+        else:
+            lx = 0.0
+        ly = min(max(ly, 0.0), max(0.0, img_h - text_h))
+        return LabelLayout(mode="full", text=text,
+                           x=lx, y=ly, w=text_w, h=text_h, angle=0.0)
+    ax, ay, angle = rotated_label_anchor(frame, angle, text_w, text_h,
+                                         img_w, img_h, pad)
+    return LabelLayout(mode="full", text=text,
+                       x=ax, y=ay, w=text_w, h=text_h, angle=angle)
+
+
 def plan_label(frame: Frame, font,
                img_w: float, img_h: float,
                placed: list, pad: float = 2.0) -> LabelLayout:
@@ -290,6 +333,7 @@ def plan_label(frame: Frame, font,
             lx = min(max(lx, 0.0), img_w - text_w)
         else:
             lx = 0.0
+        ly = min(max(ly, 0.0), max(0.0, img_h - text_h))
         layout = LabelLayout(mode="full", text=text,
                              x=lx, y=ly, w=text_w, h=text_h, angle=0.0)
     else:
@@ -431,8 +475,7 @@ class PreviewView(QGraphicsView):
         self._scene.addItem(poly_item)
         self._frame_items.append(poly_item)
 
-        # 标签布局（等长省略 + 降级判定，D35/D33）：样式仍走 label_style 单一来源；
-        # 字号下限：有效屏幕字高不低于 MIN_FONT_PX（小缩放下标签保持可读）
+        # 标签布局：F1 交互模式永远全长（D39），主预览走省略/降级链（D35/D33）
         rect = poly.boundingRect()
         font = QFont()
         font_px = max(label_font_size(rect.width(), rect.height()),
@@ -440,7 +483,10 @@ class PreviewView(QGraphicsView):
         font.setPixelSize(font_px)
         bg_color, text_color, bold = label_style(frame, state)
         font.setBold(bold)
-        layout = plan_label(frame, font, img_w, img_h, placed)
+        if self._interactive:
+            layout = _full_label_layout(frame, font, img_w, img_h)
+        else:
+            layout = plan_label(frame, font, img_w, img_h, placed)
         group = QGraphicsItemGroup()
         bg = QGraphicsRectItem(0, 0, layout.w, layout.h, group)
         bg.setPen(QPen(Qt.NoPen))

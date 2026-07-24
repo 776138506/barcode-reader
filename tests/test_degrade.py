@@ -44,19 +44,32 @@ def _font(px=20):
     return font
 
 
+def _edge_for(text, px=20, margin=40):
+    """字体驱动：按本地 QFontMetrics 实测文本宽度构造框长边（D40）。
+    任何平台字体下 full 判定都确定（标签宽 + margin 余量）。"""
+    m = QFontMetricsF(_font(px))
+    return m.horizontalAdvance(text) + 4 + margin
+
+
+def _frame_edge(x, y, edge, seq=1, content="abc", h=100):
+    return Frame(points=[(x, y), (x + edge, y), (x + edge, y + h), (x, y + h)],
+                 seq=seq, suspect=False, content=content)
+
+
 # ---------- plan_label 判定 ----------
 
 def test_plan_normal_full(qapp):
+    f = _frame_edge(20, 30, _edge_for("1: abc"), content="abc")
     placed = []
-    layout = plan_label(_frame(), _font(), 400, 400, placed)
-    assert layout.mode == "full" and layout.text == frame_label(_frame())
+    layout = plan_label(f, _font(), 400, 400, placed)
+    assert layout.mode == "full" and layout.text == frame_label(f)
     assert len(placed) == 1
 
 
 def test_plan_collision_only_second_degrades(qapp):
-    # 两个框位置几乎相同 → 标签必然碰撞
-    f1 = _frame(x=20, y=30)
-    f2 = _frame(x=25, y=35, seq=2)
+    # 两个框位置几乎相同 → 标签必然碰撞（宽度字体驱动，任何平台都撞）
+    f1 = _frame_edge(20, 30, _edge_for("1: abc"), content="abc")
+    f2 = _frame_edge(25, 35, _edge_for("2: abc"), seq=2, content="abc")
     placed = []
     l1 = plan_label(f1, _font(), 400, 400, placed)
     l2 = plan_label(f2, _font(), 400, 400, placed)
@@ -66,8 +79,9 @@ def test_plan_collision_only_second_degrades(qapp):
 
 def test_plan_no_font_trigger_full(qapp):
     """D33：有效字高小不再独立降级——单码任何缩放都应全长（渲染层字号下限兜底）。"""
+    f = _frame_edge(20, 30, _edge_for("1: abc"), content="abc")
     placed = []
-    layout = plan_label(_frame(), _font(), 400, 400, placed)
+    layout = plan_label(f, _font(), 400, 400, placed)
     assert layout.mode == "full"
     assert len(placed) == 1
 
@@ -275,7 +289,8 @@ def test_three_vertical_elide_equal_length(qapp, tmp_path):
     assert len(texts) == 3, f"应三个标签: {texts}"
     for i, t in enumerate(texts):
         assert "…" in t, f"长内容应省略: {t!r}"
-        assert t.startswith(f"{i + 1}: 86"), f"头部保留: {t!r}"
+        # 语义断言（D40）：序号 + 至少一个内容首字符 + 尾部两位，不硬编码省略深度
+        assert t.startswith(f"{i + 1}: {contents[i][0]}"), f"头部保留: {t!r}"
         assert t.endswith(contents[i][-2:]), f"尾部保留: {t!r}"
 
     # 等长断言：布局宽度 ≈ 各自框长边（本机字体实测，不用硬编码宽度）
