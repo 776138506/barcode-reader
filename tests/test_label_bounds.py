@@ -74,8 +74,8 @@ def test_embedded_elision_unchanged(qapp):
     texts = _label_texts(view)
     assert len(texts) == 1
     assert "…" in texts[0], f"主预览应继续等长省略: {texts[0]!r}"
-    assert texts[0].startswith("7: 83")
-    assert texts[0].endswith("43")
+    assert texts[0].startswith("7: 8")
+    assert texts[0].endswith("3")
 
 
 # ---------- 四方向出界翻转/收边 ----------

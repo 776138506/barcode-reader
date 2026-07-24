@@ -3,12 +3,12 @@
 > 新会话接手时先读本文件和 `../AGENTS.md`、`DECISIONS.md`，再动代码。
 > 本文件随每轮工作结束更新「当前状态」和「排队清单」两节。
 
-更新于：2026-07-24（本轮：CI Windows 标签用例修复 D40——测试构造字体驱动化）
+更新于：2026-07-24（本轮：CI Windows 收尾——D40 补强：最短形式实测宽推导框尺寸）
 
 ## 当前状态
 
 - **测试**:151 passed（`pytest tests/ -q`，约 27s，含 1 个 ~12s slow 真实图验收）;offscreen 冒烟 `tests/smoke_gui.py` → SMOKE OK;`tests/test_requirements.py` 守护依赖声明完整性;`tests/conftest.py` autouse 逐测 GC（防隐藏窗口引用环累积致 offscreen 崩溃，D30）
-- **CI 修复（待下轮验证）**:Windows 6 个标签布局用例——F1 一致性经 D39 自愈，其余 5 个按 D40 改字体驱动构造（框尺寸由本地 QFontMetrics 实测决定，省略断言语义化）
+- **CI 修复（待下轮验证）**:Windows 6 个标签布局用例——F1 一致性经 D39 自愈，其余按 D40 改字体驱动构造；二次收尾 3 个（长标签省略/三码等长/嵌入省略）：框尺寸按最短省略形式实测宽推导，头尾保留断言放宽到 ≥1 字符
 - **CI 修复（待下轮验证）**:macOS worker 竞态 `RuntimeError: Signal source has been deleted` → 模块级 `_ACTIVE_WORKERS` 注册表（D37）;Windows 竖码 frame_angle=0 → 取长边方向（D36）;Ubuntu 短 QR 框过小误降级 → 测试码放大 8x（D38）
 - **CI**:commit 45cfd70 失败（Windows 6 / Ubuntu 2）已按 D34 修复：字体相关断言改短内容/结构化、真实图断言放宽为集合语义（Win/Ubuntu 实测 4/5，共识边际实例降级的假阴性，非管线 bug）；待下一轮 CI 验证
 - **CI/CD**:`.github/workflows/ci.yml`（push main/PR，三平台 × Python 3.14，Linux 装 X11/GL,offscreen pytest + 冒烟）;`.github/workflows/release.yml`（v* 标签，三平台 build.py 打包 → zip/tar → gh release,**尚未实机运行，首轮结果待观察**）
