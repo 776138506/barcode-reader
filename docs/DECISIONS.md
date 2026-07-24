@@ -300,3 +300,10 @@
 - 合成疑难图命中对噪声种子敏感，已锁种子保证可复现；真实疑难图验证集待用户提供
 - Windows 剪贴板 DIB 归一化、Windows/Linux 打包未实机验证
 - 真实药品追溯码图在 Win/Ubuntu 命中 4/5（macOS 5/5）：zxing-cpp 平台二进制对边缘组合命中略异，一个共识边际实例被降级为疑似（D34 结论：误识防护的正常假阴性，非管线 bug）
+
+## D41 Windows 控制台编码：输出统一 UTF-8 重配置（2026-07-24）
+
+- **背景**:Windows CI（cp1252 控制台）跑 smoke_gui.py 时中文 print 抛 `UnicodeEncodeError`，测试全绿但冒烟步骤红。
+- **决策**:`tests/smoke_gui.py` 启动即 `sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")`;CI workflow 环境加 `PYTHONIOENCODING: utf-8` 双保险。
+- **弃项**：冒烟输出改英文（中文输出对本地用户有价值，不应为 CI 让路）。
+- **后果**：后续新增的 CLI/冒烟脚本同样遵守"脚本内重配置 UTF-8"原则。
