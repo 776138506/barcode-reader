@@ -64,6 +64,7 @@ ui/formats_dialog.py       # 码制白名单勾选对话框
 .github/workflows/release.yml  # 标签触发三平台打包并挂 Release
 tests/                     # pytest + gen_test_images.py + smoke_gui.py
 build.py                   # PyInstaller 打包脚本
+tools/gen_icon.py          # 图标生成：icon.svg 矢量源 → 4x超采样 → png/ico/icns
 ```
 
 - 历史库：`history.py`（SQLite，`records` 表：时间戳/文件名/码制/内容/来源路径；`strategy_log` 表：ts/image_sha256/features(JSON)/attempts(JSON)/final_strategy/final_hit_count，库文件在 `paths.data_dir()`）；写入失败只记日志不得影响主流程；`MainWindow(history_db=None)` 支持注入 tmp 库
