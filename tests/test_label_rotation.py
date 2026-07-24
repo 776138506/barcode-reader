@@ -235,3 +235,13 @@ def test_three_vertical_codes_labels_attached(qapp, tmp_path):
         assert gx <= 6 and gy <= 6, \
             f"{r.content}: 标签脱离框体 间隙=({gx:.0f},{gy:.0f})"
     win.close()
+
+
+def test_frame_angle_axis_aligned_vertical_box():
+    """D38：轴对齐竖高四边形（Windows zxing 返回形式）也应判为 90°。"""
+    # TL→TR 是短边（水平），TR→BR 是长边（竖直向下）——Windows 式角点
+    frame = _quad((30, 50), (130, 50), (130, 400), (30, 400))
+    assert frame_angle(frame) == 90.0
+    # 轴对齐横宽四边形保持 0°
+    frame2 = _quad((50, 30), (400, 30), (400, 130), (50, 130))
+    assert frame_angle(frame2) == 0.0

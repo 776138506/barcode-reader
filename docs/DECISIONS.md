@@ -249,6 +249,26 @@
 - **弃项**：按可用空间（图片边界）省略（用户明确框长才是最优视觉效果）；缩短字号代替省略（D33 已定字号下限，再缩即不可读）。
 - **后果**：`tests/test_degrade.py` 新增等长对齐（布局宽 ≤ 框长 +6 且 ≥ 框长 50%）、逐级省略与恢复（单调缩短/头尾保留/放宽恢复全长）、最短兜底 None、竖排三码 20 位内容省略可读断言；全量 139 passed 全绿。
 
+## D36 标签方向修正：frame_angle 取长边而非固定 TL→TR（2026-07-24）
+
+- **背景**：CI Windows 上 90° 竖排 Code128 的 `frame_angle` 算出 0°（macOS 90°）——Windows 的 zxing-cpp 对该图返回**轴对齐角点**（TL→TR 是水平短边而非阅读方向长边），D29 的 TL→TR 约定在此类角点形态下失效。
+- **决策**：`frame_angle()` 改为取 TL→TR 与 TR→BR 中**较长的一条边**作为方向（归一化规则不变）；macOS 行为逐一致（其 TL→TR 本就是长边），Windows 轴对齐竖框（高>宽）正确判为 90°。
+- **证据**：D29 实证过 ±15° 一维码角点轴对齐现象；Windows CI 日志断言「竖码标签应旋转 90°，实际 0.0」。
+- **后果**：`tests/test_label_rotation.py` 新增轴对齐竖框（短边 TL→TR）判 90° 用例；macOS 全量回归无变化。
+
+## D37 worker 生命周期竞态：模块级注册表替代窗口级持有（2026-07-24）
+
+- **背景**：CI macOS 报 `RuntimeError: Signal source has been deleted`——窗口 close+GC 后 `self._workers` 集合被销毁，进行中的 worker 的 signals 被删，emit 崩溃、finished 信号丢失。时序相关真实 bug，本地碰巧不现。
+- **决策**：worker 引用改由**模块级注册表 `_ACTIVE_WORKERS`** 持有（start 时注册、run() finally 注销），生命周期与窗口解耦；窗口销毁后交付到已关闭窗口的信号由 Qt 自动丢弃（接收方已删安全），不再依赖窗口级 set。
+- **弃项**：emit 前 try/except 盖住（用户明确禁止，且会丢失结果）；窗口 closeEvent 阻塞等 worker（卡 UI）。
+- **后果**：`tests/test_worker_race.py` 3 条（注册表生命周期/close+GC 竞态不崩/重建窗口不错乱），用 stderr 捕获「Signal source has been deleted」作断言。
+
+## D38 CI 二次暴露：短 QR 框过小导致宽字体平台误降级（2026-07-24）
+
+- **背景**：D35 后 Ubuntu 上 `test_f1_label_items_consistent` 仍红——4x 放大的短内容 QR 框长边仅 ~100px，最短省略形式 `1: a…c` 在宽字体平台（~110px）放不下被误降级徽标。
+- **决策**：测试码放大到 8x（框 ~200px），最短省略形式在任意平台字体下都放得下，断言语义（全长显示）不受字体宽度影响（D34 原则的延续）。
+- **后果**：`tests/test_labels.py` 短 QR 由 4x 改 8x；全量 143 passed 全绿。
+
 ---
 
 ## 已知限制登记（随解决随更新）

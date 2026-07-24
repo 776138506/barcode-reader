@@ -3,11 +3,12 @@
 > 新会话接手时先读本文件和 `../AGENTS.md`、`DECISIONS.md`，再动代码。
 > 本文件随每轮工作结束更新「当前状态」和「排队清单」两节。
 
-更新于：2026-07-24（本轮：标签等长省略 D35——目标长度 = 绿框长边）
+更新于：2026-07-24（本轮：worker 竞态 D37 + frame_angle 长边修正 D36 + 短 QR 框 D38）
 
 ## 当前状态
 
-- **测试**:139 passed（`pytest tests/ -q`，约 26s，含 1 个 ~12s slow 真实图验收）;offscreen 冒烟 `tests/smoke_gui.py` → SMOKE OK;`tests/test_requirements.py` 守护依赖声明完整性;`tests/conftest.py` autouse 逐测 GC（防隐藏窗口引用环累积致 offscreen 崩溃，D30）
+- **测试**:143 passed（`pytest tests/ -q`，约 45s，含 1 个 ~12s slow 真实图验收）;offscreen 冒烟 `tests/smoke_gui.py` → SMOKE OK;`tests/test_requirements.py` 守护依赖声明完整性;`tests/conftest.py` autouse 逐测 GC（防隐藏窗口引用环累积致 offscreen 崩溃，D30）
+- **CI 修复（待下轮验证）**:macOS worker 竞态 `RuntimeError: Signal source has been deleted` → 模块级 `_ACTIVE_WORKERS` 注册表（D37）;Windows 竖码 frame_angle=0 → 取长边方向（D36）;Ubuntu 短 QR 框过小误降级 → 测试码放大 8x（D38）
 - **CI**:commit 45cfd70 失败（Windows 6 / Ubuntu 2）已按 D34 修复：字体相关断言改短内容/结构化、真实图断言放宽为集合语义（Win/Ubuntu 实测 4/5，共识边际实例降级的假阴性，非管线 bug）；待下一轮 CI 验证
 - **CI/CD**:`.github/workflows/ci.yml`（push main/PR，三平台 × Python 3.14，Linux 装 X11/GL,offscreen pytest + 冒烟）;`.github/workflows/release.yml`（v* 标签，三平台 build.py 打包 → zip/tar → gh release,**尚未实机运行，首轮结果待观察**）
 - **功能**:批量导入（拖放/文件对话框/剪贴板粘贴）、全码制识别（zxing-cpp)、分层管线 v2+L3 区域层（签名共识误识防护，真实图 5/5）、命中位置反变换、DecodeProfile 参数化（pre/l1/l2/l3/consensus 五组全开放，默认零变化）+ 识别档案池（内置默认可恢复）+ 导出模板池（4 个内置预设）、**识别框全局编号（疑似黄框）+ 点击高亮橙框 + F1 独立预览窗口（缩放/旋转/平移/标记开关）**、识别框高亮预览、识别控制项（三档/码制白名单/疑似码/单图增强重扫，与档案正交）、去重视图+计数、SQLite 历史库+搜索、按码重命名、两段式模板导出 + XLSX/JSON + 导出过滤 + 按模板复制到剪贴板、状态持久化、轮转日志、中文界面

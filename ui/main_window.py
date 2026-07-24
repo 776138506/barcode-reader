@@ -89,6 +89,12 @@ class _WorkerSignals(QObject):
     finished = Signal(str, list, str, dict)  # path, results, error, meta(attempts/sha256/features)
 
 
+# 进程级 worker 注册表：worker 生命周期与窗口解耦（D37 竞态修复）。
+# 窗口 close+GC 后 self._workers 集合被销毁会导致 worker 的 signals 被删、
+# emit 抛 RuntimeError；改由模块级注册表持有 worker 至 run() 结束。
+_ACTIVE_WORKERS: set = set()
+
+
 class _DecodeWorker(QRunnable):
     def __init__(self, path: str, tier: str = "balanced",
                  format_names: list[str] | None = None,
@@ -102,6 +108,13 @@ class _DecodeWorker(QRunnable):
         self.signals = _WorkerSignals()
 
     def run(self):
+        _ACTIVE_WORKERS.add(self)
+        try:
+            self._run()
+        finally:
+            _ACTIVE_WORKERS.discard(self)
+
+    def _run(self):
         start = time.perf_counter()
         try:
             results, attempts = decode_image_detailed(
@@ -166,7 +179,6 @@ class MainWindow(QMainWindow):
         self.results: dict[str, list[DecodeResult]] = {}  # path -> results
         self.errors: dict[str, str] = {}
         self._pending = 0
-        self._workers: set[_DecodeWorker] = set()  # 持有引用防止 worker 被 GC 导致信号源被删
         self._pool = QThreadPool.globalInstance()
         # 粘贴的剪贴板图片落盘到会话临时目录，退出时清理；不写入会话持久化列表
         self._clipboard_dir = Path(tempfile.mkdtemp(prefix="barcode-reader-clipboard-"))
@@ -714,7 +726,6 @@ class MainWindow(QMainWindow):
         opts = self._decode_options()
         for p in images:
             worker = _DecodeWorker(p, **opts)
-            self._workers.add(worker)
             worker.signals.finished.connect(
                 lambda path, results, error, meta, w=worker:
                 self._on_decoded(w, path, results, error, meta))
@@ -723,7 +734,6 @@ class MainWindow(QMainWindow):
     def _on_decoded(self, worker: "_DecodeWorker", path: str, results: list,
                     error: str, meta: dict | None = None):
         meta = meta or {}
-        self._workers.discard(worker)
         self.results[path] = results
         if error:
             self.errors[path] = error
@@ -796,7 +806,6 @@ class MainWindow(QMainWindow):
         opts = self._decode_options()
         opts["tier"] = "max"
         worker = _DecodeWorker(path, **opts)
-        self._workers.add(worker)
         self._pending += 1
         self.progress.setVisible(True)
         self.progress.setRange(0, max(self.progress.maximum(), self._pending))
