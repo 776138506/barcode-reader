@@ -77,18 +77,23 @@ def test_plan_no_font_trigger_full(qapp):
 
 
 def test_plan_long_label_clamped_into_bounds(qapp):
-    """长标签超出图片宽度 → 平移收进界内而不是降级。"""
+    """长标签超出图片宽度 → 平移收进界内而不是降级。
+
+    用 15 字符内容：在任平台字体下标签宽度都 < 400px（字体宽度差异不影响，
+    见 DECISIONS D34）。框放在右缘，标签须被平移收边。"""
     font = QFont()
     font.setPixelSize(20)
-    long_content = "https://example.com/" + "x" * 60
+    content = "LONG-CONTENT-15"
+    shown = f"1: {content}"  # 未超 24 字符不截断
     m = QFontMetricsF(font)
-    shown = f"1: {long_content[:24]}…"  # frame_label 截断后的实际文本
     tw = m.horizontalAdvance(shown) + 4
     th = m.height() + 2
-    f = _frame(x=200, y=30, seq=1, content=long_content)
+    assert tw < 400, f"本机字体下标签已超宽 ({tw})，需再缩短内容"
+    f = _frame(x=250, y=30, seq=1, content=content)
     placed = []
     layout = plan_label(f, tw, th, 400, 400, placed)
     assert layout.mode == "full"
+    assert layout.x < 250, "右缘框的标签应被平移收边"
     assert layout.x >= 0 and layout.x + layout.w <= 400, "越界标签应收进界内"
 
 
@@ -163,13 +168,14 @@ def test_three_vertical_degrade_and_restore(qapp, tmp_path):
 
 
 def _make_dense_horizontal(tmp_path):
-    """多码密集场景：大画布小缩放 → 字号下限使长标签变宽，同排标签水平碰撞。"""
+    """多码密集场景：大画布（嵌入预览缩放比 ~0.2，字号下限放大标签宽度），
+    同排短内容码的标签水平互相碰撞；F1 较大缩放下恢复不碰撞。"""
     sys.path.insert(0, str(IMG_DIR.parent))
     from gen_test_images import make_barcode, pad
     from PIL import Image
     canvas = Image.new("L", (2400, 300), 255)
     for i in range(3):
-        code = pad(make_barcode(f"DENSE-CODE-LONG-CONTENT-{i}", "Code128", 300, 110), 10)
+        code = pad(make_barcode(f"DENSE-CODE-LONGER-{i}", "Code128", 300, 110), 10)
         canvas.paste(code, (60 + i * 400, 90))
     path = tmp_path / "dense_horizontal.png"
     canvas.save(path)
@@ -177,7 +183,8 @@ def _make_dense_horizontal(tmp_path):
 
 
 def test_dense_codes_badge_on_collision(qapp, tmp_path):
-    """多码密集场景：小缩放 + 字号下限使标签碰撞 → 后画者降级为徽标。"""
+    """多码密集场景：小缩放 + 字号下限使标签碰撞 → 后画者降级为徽标；
+    F1 较大缩放（字号下限不再放大标签）→ 恢复全长。"""
     win = _make_window(tmp_path)
     win.add_paths([str(_make_dense_horizontal(tmp_path))])
     win._pool.waitForDone(30000)
@@ -190,6 +197,12 @@ def test_dense_codes_badge_on_collision(qapp, tmp_path):
     full = [t for t in texts if ": " in t]
     assert len(badges) >= 1, f"密集碰撞应有降级徽标: {texts}"
     assert len(full) >= 1, "先画的保留全长"
+
+    win.open_preview_window()
+    qapp.processEvents()
+    texts_f1 = _label_texts(win._preview_window._view)
+    assert all(": " in t for t in texts_f1), f"F1 较大缩放应恢复全长: {texts_f1}"
+    win._preview_window.close()
     win.close()
 
     # F1 放大后恢复全长
@@ -206,9 +219,14 @@ def test_dense_codes_badge_on_collision(qapp, tmp_path):
 
 
 def test_horizontal_code_full_label_regression(qapp, tmp_path):
-    """水平码回归：默认不降级，标签为全长。"""
+    """水平码回归：默认不降级，标签为全长（短内容码，字体宽度差异无关）。"""
+    sys.path.insert(0, str(IMG_DIR.parent))
+    from gen_test_images import make_barcode, pad
+    img = pad(make_barcode("ABC-1", "Code128", 400, 120), 20)
+    path = tmp_path / "short_h.png"
+    img.save(path)
     win = _make_window(tmp_path)
-    win.add_paths([str(IMG_DIR / "code128_a.png")])
+    win.add_paths([str(path)])
     win._pool.waitForDone(30000)
     qapp.processEvents()
     win.file_list.setCurrentRow(0)

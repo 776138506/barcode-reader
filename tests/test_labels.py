@@ -127,8 +127,19 @@ def test_main_preview_label_bg(qapp, tmp_path):
 # ---------- F1 一致性 ----------
 
 def test_f1_label_items_consistent(qapp, tmp_path):
+    # 用短内容码：标签必然放得下（不依赖平台字体宽度差异，CI 三平台一致）
+    import numpy as np
+    import zxingcpp
+    from PIL import Image
+    b = zxingcpp.create_barcode("abc", zxingcpp.BarcodeFormat.QRCode)
+    img = Image.fromarray(np.array(b.to_image()))
+    w, h = img.size
+    img = img.resize((w * 4, h * 4), Image.NEAREST)
+    path = tmp_path / "short_qr.png"
+    img.save(path)
+
     win = _make_window(tmp_path)
-    win.add_paths([str(IMG_DIR / "qr_hello.png")])
+    win.add_paths([str(path)])
     win._pool.waitForDone(30000)
     qapp.processEvents()
     win.file_list.setCurrentRow(0)

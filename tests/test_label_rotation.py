@@ -12,7 +12,7 @@ import pytest  # noqa: E402
 import zxingcpp  # noqa: E402
 from PIL import Image  # noqa: E402
 from PySide6.QtCore import QSettings  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGraphicsItemGroup  # noqa: E402
 
 from decoder import decode_image  # noqa: E402
 from profiles import ProfileStore  # noqa: E402
@@ -99,7 +99,8 @@ def test_anchor_real_corner_convention():
 # ---------- 像素级：90° 旋转码标签竖排分布 ----------
 
 def test_vertical_code_label_is_vertical(qapp, tmp_path):
-    """90° 旋转码：标签底色区域呈竖排（高>宽）分布；水平码保持横排（回归）。"""
+    """90° 旋转码：标签组旋转 90° 且呈竖排几何（结构化断言，不依赖平台字体/像素）；
+    水平码保持横排（回归）。"""
     sys.path.insert(0, str(IMG_DIR.parent))
     from gen_test_images import make_barcode, pad
     img = pad(make_barcode("VERT-90-TEST", "Code128", 480, 150), 30)
@@ -114,35 +115,30 @@ def test_vertical_code_label_is_vertical(qapp, tmp_path):
     win.file_list.setCurrentRow(0)
     qapp.processEvents()
 
-    pix = win.preview.pixmap()
-    assert not pix.isNull()
-    img_q = pix.toImage()
-    # 标签底色（半透明深底叠在白底上 → 灰 60-140）像素的分布
-    pts = [(x, y) for x in range(img_q.width()) for y in range(img_q.height())
-           if (lambda c: 50 < c.red() < 140 and abs(c.red() - c.green()) < 8
-               and abs(c.green() - c.blue()) < 8)(img_q.pixelColor(x, y))]
-    assert pts, "未找到标签底色像素"
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    w = max(xs) - min(xs) + 1
-    h = max(ys) - min(ys) + 1
-    assert h > w, f"标签应呈竖排分布（高 {h} > 宽 {w}）"
+    groups = [i for i in win.preview._frame_items
+              if isinstance(i, QGraphicsItemGroup)]
+    assert len(groups) == 1, "应有一个标签组"
+    g = groups[0]
+    assert abs(g.rotation() - 90.0) < 1.0, f"竖码标签应旋转 90°，实际 {g.rotation()}"
+    rect = g.childrenBoundingRect()
+    # childrenBoundingRect 为组内局部坐标（未旋转）：长标签宽>高；
+    # 经 rotation=90 后屏幕上呈竖排（宽变高、高变宽）
+    assert rect.width() > rect.height(), \
+        f"旋转 90° 的长标签应在屏幕上呈竖排（局部宽 {rect.width():.0f} > 高 {rect.height():.0f}）"
 
-    # 回归：水平码标签仍横排（宽>高）
+    # 回归：水平码标签不旋转且横排
     win2 = _make_window(tmp_path / "h")
     win2.add_paths([str(IMG_DIR / "code128_a.png")])
     win2._pool.waitForDone(30000)
     qapp.processEvents()
     win2.file_list.setCurrentRow(0)
     qapp.processEvents()
-    img2 = win2.preview.pixmap().toImage()
-    pts2 = [(x, y) for x in range(img2.width()) for y in range(img2.height())
-            if (lambda c: 50 < c.red() < 140 and abs(c.red() - c.green()) < 8
-                and abs(c.green() - c.blue()) < 8)(img2.pixelColor(x, y))]
-    assert pts2
-    xs2 = [p[0] for p in pts2]
-    ys2 = [p[1] for p in pts2]
-    assert (max(xs2) - min(xs2) + 1) > (max(ys2) - min(ys2) + 1), "水平码标签应保持横排"
+    groups2 = [i for i in win2.preview._frame_items
+               if isinstance(i, QGraphicsItemGroup)]
+    assert len(groups2) == 1
+    assert abs(groups2[0].rotation()) < 1.0, "水平码标签不应旋转"
+    rect2 = groups2[0].childrenBoundingRect()
+    assert rect2.width() > rect2.height(), "水平码标签应保持横排几何"
     win.close()
     win2.close()
 
